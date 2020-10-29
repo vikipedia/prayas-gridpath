@@ -366,7 +366,7 @@ def endogenous_to_exogenous(scenario1:str,
 
       --scenario2 TEXT     default -> toy1_pass2
 
-      --scenario2 TEXT     default -> None
+      --scenario3 TEXT     default -> None
 
       --csv_path TEXT      default -> csvs_toy
 
