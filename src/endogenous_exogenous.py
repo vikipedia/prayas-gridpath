@@ -26,11 +26,11 @@ def get_field(webdb, table, field, conds):
     r = webdb.where(table, **conds).first()
 
     if not r:
-        raise NoEntriesError(f"Field {field} not found in {table} for {cond}"+str(params))
+        raise NoEntriesError(f"Field {field} not found in {table} for {conds}")
     return r[field]
 
 
-def get_table_dataframe(webdb, table):
+def get_table_dataframe(webdb:web.db.SqliteDB, table:str)->pd.DataFrame:
     """
     read table as dataframe. 
     """
@@ -91,7 +91,7 @@ def get_exogenous_avail_id(conn, scenario, project):
 
 
 @functools.lru_cache(maxsize=None)
-def get_temporal_senario_id(conn, scenario):
+def get_temporal_scenario_id(conn, scenario):
     return get_field(conn,
                           "scenarios",
                           "temporal_scenario_id",
@@ -109,22 +109,31 @@ def get_scenario_id(conn, scenario_name):
 class TemporalSpecsMisMatch(Exception):
     pass
 
+def get_start_end_(df, horizon, temporal_scenario_id):
+    df = df[(df.horizon == horizon) &
+            (df.temporal_scenario_id == temporal_scenario_id)]
+    return df.iloc[0]['tmp_start'], df.iloc[0]['tmp_end']
+
+
+def get_start_end(df, horizon, temp_scena_id):
+    if isinstance(horizon, int):
+        return get_start_end_(df, horizon, temp_scena_id)
+    else:
+        t = sum([get_start_end_(df, h, temp_scena_id) for h in horizon], start=tuple())
+        return min(t), max(t)
 
 def find_timepoints(conn, horizon, scenario):
-    temp_scena_id = get_temporal_senario_id(conn, scenario)
+    temp_scena_id = get_temporal_scenario_id(conn, scenario)
     df = get_table_dataframe(conn,
                              "inputs_temporal_horizon_timepoints_start_end")
-    df = df[(df.horizon == horizon) &
-            (df.temporal_scenario_id == temp_scena_id)]
-    r, c = df.shape
-    if not r:
+    try:
+        start, end = get_start_end(df, horizon, temp_scena_id)
+        return np.arange(start, end+1)
+    except IndexError as e:
         msg = f"Timepoints of previous senario do not match with horizons of {scenario}"
-        raise TemporalSpecsMisMatch(msg)
+        raise TemporalSpecsMisMatch(msg, e)
 
-    start = df.iloc[0]['tmp_start']
-    end = df.iloc[0]['tmp_end']
-    return np.arange(start, end+1)
-
+            
 
 def get_generic_col(size, dtype, value):
     col = np.empty(size, dtype=dtype)
@@ -133,11 +142,15 @@ def get_generic_col(size, dtype, value):
 
 
 def create_table_for_horizon(conn,
-                             horizon, monthly, scenario2,
+                             horizon, monthly, scenario2, scenario3,
                              project, colnames,
                              exo_id_value):
-    row = monthly[monthly.timepoint == horizon].iloc[0]
-    timepoints = find_timepoints(conn, horizon, scenario2)
+    HORIZON = list(horizon.keys())[0]
+    row = monthly[monthly.timepoint == HORIZON].iloc[0]
+    if scenario3:
+        timepoints = find_timepoints(conn, horizon[HORIZON], scenario3)
+    else:
+        timepoints = find_timepoints(conn, horizon[HORIZON], scenario2)
     size = len(timepoints)
     project_ = get_generic_col(size, object, project)
     exo_id = get_generic_col(size, int, exo_id_value)
@@ -152,34 +165,81 @@ def create_table_for_horizon(conn,
     return df
 
 
-def get_exogenous_results(conn, scenario1, scenario2, project):
+def get_temporal_start_end_table(conn, scenario):
+    temporal_id = get_temporal_scenario_id(conn, scenario)
+    temporal = conn.where("inputs_temporal_horizon_timepoints_start_end",
+                          temporal_scenario_id=temporal_id).list()
+    return temporal
+
+
+def get_horizons(conn, timepoints , scenario1, scenario2, scenario3):
+    """
+    Very complicated way to handle horizons matching of 
+    scenario1 -> scenario2 -> scenario3 with only
+    results from scenario1
+    """
+    if not scenario3:
+        return {t:{t:t} for t in timepoints}
+    
+    tmp1 = get_temporal_start_end_table(conn, scenario1)
+    tmp2 = get_temporal_start_end_table(conn, scenario2)
+    tmp3 = get_temporal_start_end_table(conn, scenario3)
+
+    timepoints2 = []
+    for item in tmp2:
+        timepoints2.extend(list(range(item['tmp_start'], item['tmp_end']+1)))
+    
+    horizons3 = [int(item['horizon']) for item in tmp3]
+    horizons3.sort()
+    timepoints2.sort()
+
+    if horizons3 == timepoints2:
+        return {int(r['horizon']):{int(r['horizon']):range(r['tmp_start'], r['tmp_end']+1)} for r in tmp2}
+
+
+def get_exogenous_results(conn,
+                          scenario1,
+                          scenario2,
+                          scenario3=None,
+                          project=None):
     monthly = read_availabilty_results(conn, scenario1, project)
     colnames = ["project",
                 "exogenous_availability_scenario_id",
                 "stage_id",
                 "timepoint",
                 "availability_derate"]
-    exo_id_value = get_exogenous_avail_id(conn, scenario2, project)
-    horizons = list(monthly['timepoint'])
-    params = (monthly, scenario2, project, colnames, exo_id_value)
-    total_df = create_table_for_horizon(conn, horizons[0], *params)
+    if scenario3:
+        exo_id_value = get_exogenous_avail_id(conn, scenario3, project)
+    else:
+        exo_id_value = get_exogenous_avail_id(conn, scenario2, project)
+    hdict = get_horizons(conn, monthly['timepoint'],
+                         scenario1, scenario2, scenario3)
+    params = (monthly, scenario2, scenario3, project, colnames, exo_id_value)
+    horizons = list(hdict.keys())
+    total_df = create_table_for_horizon(conn,hdict[horizons[0]], *params)
     for horizon in horizons[1:]:
-        df = create_table_for_horizon(conn, horizon, *params)
+        df = create_table_for_horizon(conn, hdict[horizon], *params)
         total_df = pd.concat([total_df, df])
     return total_df
 
 
 def dbwrite_endogenous_monthly_exogenous_input_daily(
-                                                  scenario1,
-                                                  scenario2,
-                                                  project):
+        scenario1,
+        scenario2,
+        scenario3,
+        project,
+        dbpath):
     """
     creates a pipeline from results_project_availability_endogenous to
     inputs_project_availability_exogenous for given project
     """
     
-    conn = get_database()
-    results = get_exogenous_results(conn, scenario1, scenario2, project)
+    conn = get_database(dbpath)
+    results = get_exogenous_results(conn,
+                                    scenario1,
+                                    scenario2,
+                                    scenario3,
+                                    project)
     exo_id = results.exogenous_availability_scenario_id.unique()[0]
     deletecond = {"project": project,
                   "exogenous_availability_scenario_id": exo_id}
@@ -211,10 +271,18 @@ def get_subscenario_csvpath(project, subscenario, subscenario_id, csv_location):
         raise Exception(f"CSV not found for {project}-{subscenario_id}")    
 
 
-def write_exogenous_results_csv(scenario1, scenario2, project, csv_location,
+def write_exogenous_results_csv(scenario1,
+                                scenario2,
+                                scenario3,
+                                project,
+                                csv_location,
                                 db_path=DB_PATH):
     conn = get_database(db_path)
-    r = get_exogenous_results(conn, scenario1, scenario2, project)
+    r = get_exogenous_results(conn,
+                              scenario1,
+                              scenario2,
+                              scenario3,
+                              project)
     subscenario = 'exogenous_availability_scenario_id'
     subscenario_id = r.iloc[0][subscenario]
     csvpath = get_subscenario_csvpath(project, subscenario,
@@ -234,12 +302,16 @@ def create_command(subscenario, subscenario_id, project, csv_location,
     return " ".join(["python", script, args])
 
 
-def write_exogenous_via_gridpath_script(scenario1, scenario2, project,
+def write_exogenous_via_gridpath_script(scenario1,
+                                        scenario2,
+                                        scenario3,
+                                        project,
                                         csv_location,
                                         gridpath_rep,
                                         db_path=DB_PATH):
     subscenario, subscenario_id = write_exogenous_results_csv(scenario1,
                                                               scenario2,
+                                                              scenario3,
                                                               project,
                                                               csv_location)
     
@@ -272,11 +344,13 @@ def find_binary_projects(scenario1, scenario2, db_path):
 @click.command()
 @click.option("--scenario1", default="toy1_pass1", help="Name of scenario1")
 @click.option("--scenario2", default="toy1_pass2", help="Name of scenario2")
+@click.option("--scenario3", default=None, help="Name of scenario3")
 @click.option("--csv_location", default="csvs_toy", help="Path to folder where csvs are")
 @click.option("--database", default="../toy.db", help="Path to database")
 @click.option("--gridpath_rep", default="../", help="Path of gridpath source repository")
 def endogenous_to_exogenous(scenario1:str,
                             scenario2:str,
+                            scenario3:str,
                             csv_location:str,
                             database:str,
                             gridpath_rep:str):
@@ -292,6 +366,8 @@ def endogenous_to_exogenous(scenario1:str,
 
       --scenario2 TEXT     default -> toy1_pass2
 
+      --scenario2 TEXT     default -> None
+
       --csv_path TEXT      default -> csvs_toy
 
       --database TEXT      default -> ../toy.db
@@ -302,13 +378,26 @@ def endogenous_to_exogenous(scenario1:str,
 
     projs = find_binary_projects(scenario1, scenario2, database)
     for project in projs:
-        print(f"Starting {project}...")
+        print(f"Starting {project} for {scenario2} ...")
         write_exogenous_via_gridpath_script(scenario1,
                                             scenario2,
+                                            None,
                                             project,
                                             csv_location,
                                             gridpath_rep,
                                             db_path=database)
+
+    if scenario3:
+        for project in projs:
+            print(f"Starting {project} for {scenario3} ...")
+            write_exogenous_via_gridpath_script(scenario1,
+                                                scenario2,
+                                                scenario3,
+                                                project,
+                                                csv_location,
+                                                gridpath_rep,
+                                                db_path=database)
+        
 
 if __name__ == "__main__":
     endogenous_to_exogenous()
