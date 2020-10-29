@@ -61,7 +61,7 @@ def update_table(webdb, table, df, delcondcols):
         webdb.multiple_insert(table, values=df_dict)
 
 
-def get_database(db_path=DB_PATH):
+def get_database(db_path):
     db = web.database("sqlite:///" + db_path)
     db.printing = False
     return db
@@ -276,7 +276,7 @@ def write_exogenous_results_csv(scenario1,
                                 scenario3,
                                 project,
                                 csv_location,
-                                db_path=DB_PATH):
+                                db_path):
     conn = get_database(db_path)
     r = get_exogenous_results(conn,
                               scenario1,
@@ -308,12 +308,13 @@ def write_exogenous_via_gridpath_script(scenario1,
                                         project,
                                         csv_location,
                                         gridpath_rep,
-                                        db_path=DB_PATH):
+                                        db_path):
     subscenario, subscenario_id = write_exogenous_results_csv(scenario1,
                                                               scenario2,
                                                               scenario3,
                                                               project,
-                                                              csv_location)
+                                                              csv_location,
+                                                              db_path=db_path)
     
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
@@ -368,7 +369,7 @@ def endogenous_to_exogenous(scenario1:str,
 
       --scenario3 TEXT     default -> None
 
-      --csv_path TEXT      default -> csvs_toy
+      --csv_location TEXT      default -> csvs_toy
 
       --database TEXT      default -> ../toy.db
 
