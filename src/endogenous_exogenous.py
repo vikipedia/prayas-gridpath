@@ -197,7 +197,7 @@ def get_horizons(conn, timepoints , scenario1, scenario2, scenario3):
         return {int(r['horizon']):{int(r['horizon']):range(r['tmp_start'], r['tmp_end']+1)} for r in tmp2}
 
 
-def get_exogenous_results(conn,
+def get_exogenous_results_(conn,
                           scenario1,
                           scenario2,
                           scenario3=None,
@@ -220,7 +220,7 @@ def get_exogenous_results(conn,
     for horizon in horizons[1:]:
         df = create_table_for_horizon(conn, hdict[horizon], *params)
         total_df = pd.concat([total_df, df])
-    return total_df
+    return total_df, monthly
 
 
 def dbwrite_endogenous_monthly_exogenous_input_daily(
@@ -271,25 +271,43 @@ def get_subscenario_csvpath(project, subscenario, subscenario_id, csv_location):
         raise Exception(f"CSV not found for {project}-{subscenario_id}")    
 
 
-def write_exogenous_results_csv(scenario1,
-                                scenario2,
-                                scenario3,
-                                project,
-                                csv_location,
-                                db_path):
+def get_exogenous_results(scenario1, scenario2, scenario3,
+                          project, db_path):
     conn = get_database(db_path)
-    r = get_exogenous_results(conn,
+    return get_exogenous_results_(conn,
                               scenario1,
                               scenario2,
                               scenario3,
                               project)
+
+
+def merge_in_csv(results,
+                 csvpath):
+    cols = ['stage_id', 'timepoint', 'availability_derate']
+    csvresults = results.loc[:, cols]
+    timepoint = csvresults['timepoint']
+    csvresults.set_index(timepoint, inplace=True)
+
+    allcsv = pd.read_csv(csvpath, index_col='timepoint')
+    try:
+        allcsv.loc[timepoint.min():timepoint.max()] = csvresults
+    except ValueError as v:
+        print("Failed to merge timepoints {}-{}".format(timepoint.min(),
+                                                        timepoint.max()))
+        print("Continuing ....")
+    allcsv['timepoint'] = allcsv.index
+    print(f"Merging results to {csvpath}")
+    allcsv.to_csv(csvpath, index=False, columns=cols)
+
+    
+def write_exogenous_results_csv(results,
+                                project,
+                                csv_location):
     subscenario = 'exogenous_availability_scenario_id'
-    subscenario_id = r.iloc[0][subscenario]
+    subscenario_id = results.iloc[0][subscenario]
     csvpath = get_subscenario_csvpath(project, subscenario,
                                       subscenario_id, csv_location)
-    csvresults = r.loc[:, ['stage_id', 'timepoint', 'availability_derate']]
-    print(f"Writing results to {csvpath}")
-    csvresults.to_csv(csvpath, index=False)
+    merge_in_csv(results, csvpath)
     return subscenario, subscenario_id
 
 
@@ -309,12 +327,22 @@ def write_exogenous_via_gridpath_script(scenario1,
                                         csv_location,
                                         gridpath_rep,
                                         db_path):
-    subscenario, subscenario_id = write_exogenous_results_csv(scenario1,
-                                                              scenario2,
-                                                              scenario3,
+    results,monthly = get_exogenous_results(scenario1,
+                                            scenario2,
+                                            scenario3,
+                                            project,
+                                            db_path)
+    subscenario, subscenario_id = write_exogenous_results_csv(results,
                                                               project,
-                                                              csv_location,
-                                                              db_path=db_path)
+                                                              csv_location)
+    if not scenario3:
+        csvpath = get_subscenario_csvpath(project,
+                                          subscenario,
+                                          subscenario_id,
+                                          csv_location)
+        merge_in_csv(monthly, csvpath)
+
+
     
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
@@ -398,7 +426,7 @@ def endogenous_to_exogenous(scenario1:str,
                                                 csv_location,
                                                 gridpath_rep,
                                                 db_path=database)
-        
+   
 
 if __name__ == "__main__":
     endogenous_to_exogenous()

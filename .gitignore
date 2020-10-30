@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# my py file to do scratch
+scratch.py
+
 
 # emacs
 *~
