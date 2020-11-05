@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import click
+import forced_outage
 
 DB_PATH = "/home/vikrant/programming/work/publicgit/gridpath/toy.db"
 
@@ -74,7 +75,7 @@ def read_availabilty_results(conn, scenario_name, project):
     """
     table = get_table_dataframe(conn, "results_project_availability_endogenous")
     scenario_id = get_scenario_id(conn, scenario_name)
-    return table[(table.project == project) & table.scenario_id == scenario_id]
+    return table[(table.project == project) & (table.scenario_id == scenario_id)]
 
 
 @functools.lru_cache(maxsize=None)
@@ -84,26 +85,26 @@ def get_exogenous_avail_id(conn, scenario, project):
                               "project_availability_scenario_id",
                               {"scenario_name": scenario})
     return get_field(conn,
-                      "inputs_project_availability",
-                      "exogenous_availability_scenario_id",
-                      {"project_availability_scenario_id": proj_avail_id,
-                       "project": project}),
+                     "inputs_project_availability",
+                     "exogenous_availability_scenario_id",
+                     {"project_availability_scenario_id": proj_avail_id,
+                      "project": project}),
 
 
 @functools.lru_cache(maxsize=None)
 def get_temporal_scenario_id(conn, scenario):
     return get_field(conn,
-                          "scenarios",
-                          "temporal_scenario_id",
-                          {"scenario_name": scenario})
+                     "scenarios",
+                     "temporal_scenario_id",
+                     {"scenario_name": scenario})
 
 
 @functools.lru_cache(maxsize=None)
 def get_scenario_id(conn, scenario_name):
     return get_field(conn,
-                          table="scenarios",
-                          field="scenario_id",
-                          conds={"scenario_name": scenario_name})
+                     table="scenarios",
+                     field="scenario_id",
+                     conds={"scenario_name": scenario_name})
 
 
 class TemporalSpecsMisMatch(Exception):
@@ -119,21 +120,26 @@ def get_start_end(df, horizon, temp_scena_id):
     if isinstance(horizon, int):
         return get_start_end_(df, horizon, temp_scena_id)
     else:
-        t = sum([get_start_end_(df, h, temp_scena_id) for h in horizon], start=tuple())
-        return min(t), max(t)
+        return [get_start_end_(df, h, temp_scena_id) for h in horizon]
 
+def create_array(start, end):
+    return np.arange(start, end+1)
+
+    
 def find_timepoints(conn, horizon, scenario):
     temp_scena_id = get_temporal_scenario_id(conn, scenario)
     df = get_table_dataframe(conn,
                              "inputs_temporal_horizon_timepoints_start_end")
     try:
-        start, end = get_start_end(df, horizon, temp_scena_id)
-        return np.arange(start, end+1)
+        st = get_start_end(df, horizon, temp_scena_id)
+        if isinstance(st, tuple):
+            return create_array(*st)
+        else:
+            return np.hstack([create_array(*se) for se in st])
     except IndexError as e:
         msg = f"Timepoints of previous senario do not match with horizons of {scenario}"
         raise TemporalSpecsMisMatch(msg, e)
 
-            
 
 def get_generic_col(size, dtype, value):
     col = np.empty(size, dtype=dtype)
@@ -198,10 +204,10 @@ def get_horizons(conn, timepoints , scenario1, scenario2, scenario3):
 
 
 def get_exogenous_results_(conn,
-                          scenario1,
-                          scenario2,
-                          scenario3=None,
-                          project=None):
+                           scenario1,
+                           scenario2,
+                           scenario3=None,
+                           project=None):
     monthly = read_availabilty_results(conn, scenario1, project)
     colnames = ["project",
                 "exogenous_availability_scenario_id",
@@ -271,14 +277,19 @@ def get_subscenario_csvpath(project, subscenario, subscenario_id, csv_location):
         raise Exception(f"CSV not found for {project}-{subscenario_id}")    
 
 
-def get_exogenous_results(scenario1, scenario2, scenario3,
+def get_exogenous_results(scenario1, scenario2, scenario3,fo,
                           project, db_path):
     conn = get_database(db_path)
-    return get_exogenous_results_(conn,
-                              scenario1,
-                              scenario2,
-                              scenario3,
-                              project)
+    results,monthly = get_exogenous_results_(conn,
+                                             scenario1,
+                                             scenario2,
+                                             scenario3,
+                                             project)
+    if scenario3 and isinstance(fo, pd.DataFrame):
+        derate = combine_forced_outage(results, fo, project)
+        results['availability_derate'].iloc[:] = derate.iloc[:]
+
+    return results, monthly    
 
 
 def merge_in_csv(results,
@@ -320,9 +331,16 @@ def create_command(subscenario, subscenario_id, project, csv_location,
     return " ".join(["python", script, args])
 
 
+def combine_forced_outage(maintenance, fofull, project):
+    m = maintenance['availability_derate'].copy()
+    fo = fofull[project]
+    m.reset_index(drop=True, inplace=True)
+    return forced_outage.combine_fo_m(m, fo)
+    
 def write_exogenous_via_gridpath_script(scenario1,
                                         scenario2,
                                         scenario3,
+                                        fo,
                                         project,
                                         csv_location,
                                         gridpath_rep,
@@ -330,6 +348,7 @@ def write_exogenous_via_gridpath_script(scenario1,
     results,monthly = get_exogenous_results(scenario1,
                                             scenario2,
                                             scenario3,
+                                            fo,
                                             project,
                                             db_path)
     subscenario, subscenario_id = write_exogenous_results_csv(results,
@@ -357,8 +376,7 @@ def write_exogenous_via_gridpath_script(scenario1,
 
 
     
-def find_binary_projects(scenario1, scenario2, db_path):
-    webdb = get_database(db_path)
+def find_projects(scenario1, type_, webdb):
     availability_id1 = get_field(webdb,
                                  "scenarios",
                                  "project_availability_scenario_id",
@@ -366,23 +384,81 @@ def find_binary_projects(scenario1, scenario2, db_path):
     
     rows = webdb.where("inputs_project_availability",
                        project_availability_scenario_id=availability_id1,
-                       availability_type="binary").list()
-    return [r['project'] for r in rows]
+                       availability_type=type_).list()
+    
+    return set(r['project'] for r in rows)
 
 
-@click.command()
-@click.option("--scenario1", default="toy1_pass1", help="Name of scenario1")
-@click.option("--scenario2", default="toy1_pass2", help="Name of scenario2")
-@click.option("--scenario3", default=None, help="Name of scenario3")
-@click.option("--csv_location", default="csvs_toy", help="Path to folder where csvs are")
-@click.option("--database", default="../toy.db", help="Path to database")
-@click.option("--gridpath_rep", default="../", help="Path of gridpath source repository")
+def find_projects_to_copy(scenario1, scenario2, db_path):
+    webdb = get_database(db_path)
+    projects1 = find_projects(scenario1, "binary", webdb)
+    projects2 = find_projects(scenario2, "exogenous", webdb)
+    return projects1 & projects2
+
+
 def endogenous_to_exogenous(scenario1:str,
                             scenario2:str,
                             scenario3:str,
+                            fo:str,
                             csv_location:str,
                             database:str,
-                            gridpath_rep:str):
+                            gridpath_rep:str,
+                            skip_scenario2:bool):
+
+    projs = find_projects_to_copy(scenario1, scenario2, database)
+    
+    if not skip_scenario2:
+        for project in projs:
+            print(f"Starting {project} for {scenario2} ...")
+            write_exogenous_via_gridpath_script(scenario1,
+                                                scenario2,
+                                                scenario3=None,
+                                                fo=None,
+                                                project=project,
+                                                csv_location=csv_location,
+                                                gridpath_rep= gridpath_rep,
+                                                db_path=database)
+
+    if scenario3:
+        if fo:
+            print("Reading forced outage excel workbook")
+            fo = pd.read_excel(fo,
+                               sheet_name="gridpath-input",
+                               nrows=35041,
+                               usecols=projs)
+        
+        for project in projs:
+            print(f"Starting {project} for {scenario3} ...")
+            write_exogenous_via_gridpath_script(scenario1,
+                                                scenario2,
+                                                scenario3,
+                                                fo,
+                                                project,
+                                                csv_location,
+                                                gridpath_rep,
+                                                db_path=database)
+
+    
+
+
+@click.command()
+@click.option("-s1", "--scenario1", default="toy1_pass1", help="Name of scenario1")
+@click.option("-s2", "--scenario2", default="toy1_pass2", help="Name of scenario2")
+@click.option("-s3", "--scenario3", default=None, help="Name of scenario3")
+@click.option("-f", "--fo", default=None, help="Excel filepath, containing forced outage information")
+@click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
+@click.option("-d", "--database", default="../toy.db", help="Path to database")
+@click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
+@click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2")
+def main(scenario1:str,
+         scenario2:str,
+         scenario3:str,
+         fo:str,
+         csv_location:str,
+         database:str,
+         gridpath_rep:str,
+         skip_scenario2:bool):
+
     """
     Usage: python endogenous_exogenous.py [OPTIONS]
     this is a script to copy endogenous output from scenario1
@@ -397,6 +473,8 @@ def endogenous_to_exogenous(scenario1:str,
 
       --scenario3 TEXT     default -> None
 
+      --fo TEXT  default -> None     
+
       --csv_location TEXT      default -> csvs_toy
 
       --database TEXT      default -> ../toy.db
@@ -404,29 +482,16 @@ def endogenous_to_exogenous(scenario1:str,
       --gridpath_rep TEXT  default-> ../
 
     """
-
-    projs = find_binary_projects(scenario1, scenario2, database)
-    for project in projs:
-        print(f"Starting {project} for {scenario2} ...")
-        write_exogenous_via_gridpath_script(scenario1,
-                                            scenario2,
-                                            None,
-                                            project,
-                                            csv_location,
-                                            gridpath_rep,
-                                            db_path=database)
-
-    if scenario3:
-        for project in projs:
-            print(f"Starting {project} for {scenario3} ...")
-            write_exogenous_via_gridpath_script(scenario1,
-                                                scenario2,
-                                                scenario3,
-                                                project,
-                                                csv_location,
-                                                gridpath_rep,
-                                                db_path=database)
-   
-
+    return endogenous_to_exogenous(
+        scenario1,
+        scenario2,
+        scenario3,
+        fo,
+        csv_location,
+        database,
+        gridpath_rep,
+        skip_scenario2
+    )
+    
 if __name__ == "__main__":
-    endogenous_to_exogenous()
+    main()

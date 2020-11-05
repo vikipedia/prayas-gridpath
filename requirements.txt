@@ -1,2 +1,3 @@
 GridPath==0.7.2
 web.py
+xlrd
