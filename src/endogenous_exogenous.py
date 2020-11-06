@@ -226,6 +226,7 @@ def get_exogenous_results_(conn,
     for horizon in horizons[1:]:
         df = create_table_for_horizon(conn, hdict[horizon], *params)
         total_df = pd.concat([total_df, df])
+    total_df.reset_index(drop=True, inplace=True)
     return total_df, monthly
 
 
@@ -287,7 +288,7 @@ def get_exogenous_results(scenario1, scenario2, scenario3,fo,
                                              project)
     if scenario3 and isinstance(fo, pd.DataFrame):
         derate = combine_forced_outage(results, fo, project)
-        results['availability_derate'].iloc[:] = derate.iloc[:]
+        results['availability_derate'] = derate
 
     return results, monthly    
 
@@ -334,7 +335,6 @@ def create_command(subscenario, subscenario_id, project, csv_location,
 def combine_forced_outage(maintenance, fofull, project):
     m = maintenance['availability_derate'].copy()
     fo = fofull[project]
-    m.reset_index(drop=True, inplace=True)
     return forced_outage.combine_fo_m(m, fo)
     
 def write_exogenous_via_gridpath_script(scenario1,
@@ -393,7 +393,7 @@ def find_projects_to_copy(scenario1, scenario2, db_path):
     webdb = get_database(db_path)
     projects1 = find_projects(scenario1, "binary", webdb)
     projects2 = find_projects(scenario2, "exogenous", webdb)
-    return projects1 & projects2
+    return sorted(projects1 & projects2)
 
 
 def endogenous_to_exogenous(scenario1:str,
@@ -403,9 +403,12 @@ def endogenous_to_exogenous(scenario1:str,
                             csv_location:str,
                             database:str,
                             gridpath_rep:str,
-                            skip_scenario2:bool):
+                            skip_scenario2:bool,
+                            dev:bool):
 
     projs = find_projects_to_copy(scenario1, scenario2, database)
+    if dev:
+        projs = projs[:1]
     
     if not skip_scenario2:
         for project in projs:
@@ -450,6 +453,7 @@ def endogenous_to_exogenous(scenario1:str,
 @click.option("-d", "--database", default="../toy.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
 @click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2")
+@click.option("--dev/--no-dev", default=False, help="skip copying for senario2")
 def main(scenario1:str,
          scenario2:str,
          scenario3:str,
@@ -457,7 +461,8 @@ def main(scenario1:str,
          csv_location:str,
          database:str,
          gridpath_rep:str,
-         skip_scenario2:bool):
+         skip_scenario2:bool,
+         dev:bool):
 
     """
     Usage: python endogenous_exogenous.py [OPTIONS]
@@ -490,7 +495,8 @@ def main(scenario1:str,
         csv_location,
         database,
         gridpath_rep,
-        skip_scenario2
+        skip_scenario2,
+        dev
     )
     
 if __name__ == "__main__":

@@ -235,5 +235,11 @@ def test_moved_fo():
     nf = moved_fo(m, f)
     check_asserts(m, f, nf)
 
+    m = str_to_series("1111110000111111")
+    f = str_to_series("1100111111111000")
+    nf = moved_fo(m, f)
+    check_asserts(m, f, nf)
+
+
     
 #test_moved_fo()
