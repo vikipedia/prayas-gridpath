@@ -1,71 +1,13 @@
 import functools
 import numpy as np
 import pandas as pd
-import web
 import json
 import os
 import subprocess
 import click
 import forced_outage
-
-DB_PATH = "/home/vikrant/programming/work/publicgit/gridpath/toy.db"
-
-
-class NoEntriesError(Exception):
-    pass
-
-
-def execute(conn, query, params):
-    print(query, params)
-    result = conn.cursor().execute(query, params)
-    conn.commit()
-    r = result.fetchall()
-    return r
-
-
-def get_field(webdb, table, field, conds):
-    r = webdb.where(table, **conds).first()
-
-    if not r:
-        raise NoEntriesError(f"Field {field} not found in {table} for {conds}")
-    return r[field]
-
-
-def get_table_dataframe(webdb:web.db.SqliteDB, table:str)->pd.DataFrame:
-    """
-    read table as dataframe. 
-    """
-    return pd.read_json(json.dumps(webdb.select(table).list()))
-
-
-def update_column(webdb, table, df, column):
-    df_dict = df.to_dict(orient='split')
-    rows = df_dict['data']
-    cols = df_dict['columns']
-    index = cols.index(column)
-    cols = [cols[i] for i in range(len(cols)) if i!=index]
-    with webdb.transaction():
-        for row in rows:
-            webdb.update(table,
-                         **{column:row[index],
-                            "where":" and ".join([f"{c}=${c}" for c in cols]),
-                            "vars":dict(zip(cols, row))})
-
-
-def update_table(webdb, table, df, delcondcols):
-    """FIXME...not working"""
-    df_dict = df.to_dict(orient='records')
-    with webdb.transaction():
-        webdb.delete(table,
-                     where=" and ".join([f"{c}=${c}" for c in delcondcols]),
-                     vars=delcondcols)
-        webdb.multiple_insert(table, values=df_dict)
-
-
-def get_database(db_path):
-    db = web.database("sqlite:///" + db_path)
-    db.printing = False
-    return db
+import web
+import common
 
 
 def read_availabilty_results(conn, scenario_name, project):
@@ -73,46 +15,47 @@ def read_availabilty_results(conn, scenario_name, project):
     read results_project_availability_endogenous table
     for given scenario and project
     """
-    table = get_table_dataframe(conn, "results_project_availability_endogenous")
+    table = common.get_table_dataframe(conn, "results_project_availability_endogenous")
     scenario_id = get_scenario_id(conn, scenario_name)
     return table[(table.project == project) & (table.scenario_id == scenario_id)]
 
 
 @functools.lru_cache(maxsize=None)
 def get_exogenous_avail_id(conn, scenario, project):
-    proj_avail_id = get_field(conn,
-                              "scenarios",
-                              "project_availability_scenario_id",
-                              {"scenario_name": scenario})
-    return get_field(conn,
-                     "inputs_project_availability",
-                     "exogenous_availability_scenario_id",
-                     {"project_availability_scenario_id": proj_avail_id,
-                      "project": project}),
+    proj_avail_id = common.get_field(conn,
+                                     "scenarios",
+                                     "project_availability_scenario_id",
+                                     scenario_name= scenario)
+    return common.get_field(conn,
+                            "inputs_project_availability",
+                            "exogenous_availability_scenario_id",
+                            project_availability_scenario_id= proj_avail_id,
+                            project= project),
 
 
 @functools.lru_cache(maxsize=None)
 def get_temporal_scenario_id(conn, scenario):
-    return get_field(conn,
-                     "scenarios",
-                     "temporal_scenario_id",
-                     {"scenario_name": scenario})
+    return common.get_field(conn,
+                            "scenarios",
+                            "temporal_scenario_id",
+                            scenario_name= scenario)
 
 
 @functools.lru_cache(maxsize=None)
 def get_scenario_id(conn, scenario_name):
-    return get_field(conn,
-                     table="scenarios",
-                     field="scenario_id",
-                     conds={"scenario_name": scenario_name})
+    return common.get_field(conn,
+                            table="scenarios",
+                            field="scenario_id",
+                            scenario_name= scenario_name)
 
 
 class TemporalSpecsMisMatch(Exception):
     pass
 
 def get_start_end_(df, horizon, temporal_scenario_id):
-    df = df[(df.horizon == horizon) &
+    df = df[(df.horizon == str(horizon)) &
             (df.temporal_scenario_id == temporal_scenario_id)]
+    
     return df.iloc[0]['tmp_start'], df.iloc[0]['tmp_end']
 
 
@@ -128,8 +71,8 @@ def create_array(start, end):
     
 def find_timepoints(conn, horizon, scenario):
     temp_scena_id = get_temporal_scenario_id(conn, scenario)
-    df = get_table_dataframe(conn,
-                             "inputs_temporal_horizon_timepoints_start_end")
+    df = common.get_table_dataframe(conn,
+                                    "inputs_temporal_horizon_timepoints_start_end")
     try:
         st = get_start_end(df, horizon, temp_scena_id)
         if isinstance(st, tuple):
@@ -241,7 +184,7 @@ def dbwrite_endogenous_monthly_exogenous_input_daily(
     inputs_project_availability_exogenous for given project
     """
     
-    conn = get_database(dbpath)
+    conn = common.get_database(dbpath)
     results = get_exogenous_results(conn,
                                     scenario1,
                                     scenario2,
@@ -254,33 +197,10 @@ def dbwrite_endogenous_monthly_exogenous_input_daily(
     update_column(conn, "inputs_project_availability_exogenous",
                        results, "availability_derate")
 
-    #update_table(conn, 'inputs_project_availability_exogenous',
-    #                  results, deletecond)
-
-
-def get_master_csv_path(csv_location):
-    return os.path.join(csv_location, "csv_data_master.csv")
-
-
-def get_subscenario_path(csv_location, subscenario):
-    csvmasterpath = get_master_csv_path(csv_location)
-    csvmaster = pd.read_csv(csvmasterpath)
-    row = csvmaster[csvmaster.subscenario == subscenario].iloc[0]
-    return os.path.join(csv_location, row['path'])
-
-
-def get_subscenario_csvpath(project, subscenario, subscenario_id, csv_location):
-    path = get_subscenario_path(csv_location, subscenario)
-    csvs = [f for f in os.listdir(path) if f.startswith(f"{project}-{subscenario_id}")]
-    if csvs:
-        return os.path.join(path, csvs[0])
-    else:
-        raise Exception(f"CSV not found for {project}-{subscenario_id}")    
-
 
 def get_exogenous_results(scenario1, scenario2, scenario3,fo,
                           project, db_path):
-    conn = get_database(db_path)
+    conn = common.get_database(db_path)
     results,monthly = get_exogenous_results_(conn,
                                              scenario1,
                                              scenario2,
@@ -290,26 +210,14 @@ def get_exogenous_results(scenario1, scenario2, scenario3,fo,
         derate = combine_forced_outage(results, fo, project)
         results['availability_derate'] = derate
 
-    return results, monthly    
+    return results, monthly
 
 
 def merge_in_csv(results,
                  csvpath):
     cols = ['stage_id', 'timepoint', 'availability_derate']
-    csvresults = results.loc[:, cols]
-    timepoint = csvresults['timepoint']
-    csvresults.set_index(timepoint, inplace=True)
-
-    allcsv = pd.read_csv(csvpath, index_col='timepoint')
-    try:
-        allcsv.loc[timepoint.min():timepoint.max()] = csvresults
-    except ValueError as v:
-        print("Failed to merge timepoints {}-{}".format(timepoint.min(),
-                                                        timepoint.max()))
-        print("Continuing ....")
-    allcsv['timepoint'] = allcsv.index
-    print(f"Merging results to {csvpath}")
-    allcsv.to_csv(csvpath, index=False, columns=cols)
+    on = 'timepoint'
+    common.merge_in_csv(results, csvpath, cols, on)
 
     
 def write_exogenous_results_csv(results,
@@ -317,19 +225,10 @@ def write_exogenous_results_csv(results,
                                 csv_location):
     subscenario = 'exogenous_availability_scenario_id'
     subscenario_id = results.iloc[0][subscenario]
-    csvpath = get_subscenario_csvpath(project, subscenario,
-                                      subscenario_id, csv_location)
+    csvpath = common.get_subscenario_csvpath(project, subscenario,
+                                             subscenario_id, csv_location)
     merge_in_csv(results, csvpath)
     return subscenario, subscenario_id
-
-
-def create_command(subscenario, subscenario_id, project, csv_location,
-                   db_path, gridpath_rep):
-    script = os.path.join(gridpath_rep, "db", "utilities", "port_csvs_to_db.py")
-    args = f"--database {db_path} --csv_location {csv_location}" \
-        f" --project {project} --delete --subscenario {subscenario} " \
-        f" --subscenario_id {subscenario_id}"
-    return " ".join(["python", script, args])
 
 
 def combine_forced_outage(maintenance, fofull, project):
@@ -355,32 +254,22 @@ def write_exogenous_via_gridpath_script(scenario1,
                                                               project,
                                                               csv_location)
     if not scenario3:
-        csvpath = get_subscenario_csvpath(project,
-                                          subscenario,
-                                          subscenario_id,
-                                          csv_location)
+        csvpath = common.get_subscenario_csvpath(project,
+                                                 subscenario,
+                                                 subscenario_id,
+                                                 csv_location)
         merge_in_csv(monthly, csvpath)
 
-
-    
-    cmd = create_command(subscenario, subscenario_id, project,
-                         csv_location, db_path, gridpath_rep)
-    
-    p = subprocess.Popen(cmd, shell=True,
-                         stdout=subprocess.PIPE,
-                         stdin=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
-    stdout, stderr = p.communicate("y".encode())
-    print(stdout.decode())
-    print(stderr.decode())
-
+    common.update_subscenario_via_gridpath(subscenario, subscenario_id,
+                                           project, csv_location, db_path,
+                                           gridpath_rep)
 
     
 def find_projects(scenario1, type_, webdb):
-    availability_id1 = get_field(webdb,
-                                 "scenarios",
-                                 "project_availability_scenario_id",
-                                 {"scenario_name": scenario1})
+    availability_id1 = common.get_field(webdb,
+                                        "scenarios",
+                                        "project_availability_scenario_id",
+                                        scenario_name= scenario1)
     
     rows = webdb.where("inputs_project_availability",
                        project_availability_scenario_id=availability_id1,
@@ -390,7 +279,7 @@ def find_projects(scenario1, type_, webdb):
 
 
 def find_projects_to_copy(scenario1, scenario2, db_path):
-    webdb = get_database(db_path)
+    webdb = common.get_database(db_path)
     projects1 = find_projects(scenario1, "binary", webdb)
     projects2 = find_projects(scenario2, "exogenous", webdb)
     return sorted(projects1 & projects2)
@@ -441,8 +330,6 @@ def endogenous_to_exogenous(scenario1:str,
                                                 gridpath_rep,
                                                 db_path=database)
 
-    
-
 
 @click.command()
 @click.option("-s1", "--scenario1", default="toy1_pass1", help="Name of scenario1")
@@ -453,7 +340,7 @@ def endogenous_to_exogenous(scenario1:str,
 @click.option("-d", "--database", default="../toy.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
 @click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2")
-@click.option("--dev/--no-dev", default=False, help="skip copying for senario2")
+@click.option("--dev/--no-dev", default=False, help="Run only for one project")
 def main(scenario1:str,
          scenario2:str,
          scenario3:str,
