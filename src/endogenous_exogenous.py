@@ -133,11 +133,14 @@ def get_horizons(conn, timepoints , scenario1, scenario2, scenario3):
     tmp1 = get_temporal_start_end_table(conn, scenario1)
     tmp2 = get_temporal_start_end_table(conn, scenario2)
     tmp3 = get_temporal_start_end_table(conn, scenario3)
-
+    
     timepoints2 = []
     for item in tmp2:
         timepoints2.extend(list(range(item['tmp_start'], item['tmp_end']+1)))
-    
+
+    if len(timepoints)==len(timepoints2):
+        return {int(r['horizon']):{int(r['horizon']):int(r['horizon'])} for r in tmp3}
+        
     horizons3 = [int(item['horizon']) for item in tmp3]
     horizons3.sort()
     timepoints2.sort()
@@ -161,10 +164,22 @@ def get_exogenous_results_(conn,
         exo_id_value = get_exogenous_avail_id(conn, scenario3, project)
     else:
         exo_id_value = get_exogenous_avail_id(conn, scenario2, project)
+        r, c = monthly.shape
+        if r==365:
+            result = monthly[['project', 'stage_id', 'timepoint', 'availability_derate']]
+            exid  = np.empty_like(result['stage_id'])
+            exid[:] = exo_id_value
+            result['exogenous_availability_scenario_id'] = exid
+            return result, monthly
+            
+
     hdict = get_horizons(conn, monthly['timepoint'],
                          scenario1, scenario2, scenario3)
     params = (monthly, scenario2, scenario3, project, colnames, exo_id_value)
     horizons = list(hdict.keys())
+
+
+    
     total_df = create_table_for_horizon(conn,hdict[horizons[0]], *params)
     for horizon in horizons[1:]:
         df = create_table_for_horizon(conn, hdict[horizon], *params)

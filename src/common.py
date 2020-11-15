@@ -68,7 +68,7 @@ def update_subscenario_via_gridpath(subscenario,
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
     print(cmd)
-
+    
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
                          stdin=subprocess.PIPE,
@@ -88,9 +88,10 @@ def merge_in_csv(results,
     try:
         allcsv.loc[index.min():index.max()] = csvresults
     except ValueError as v:
-        print("Failed to merge {on} {}-{}".format(index.min(),
+        print("Failed to merge {} {}-{}".format(on, index.min(),
                                                         index.max()))
-        print("Continuing ....")
+        print("Continuing ....by appending")
+        allcsv = pd.concat([allcsv, csvresults])
     allcsv[on] = allcsv.index
     print(f"Merging results to {csvpath}")
     allcsv.to_csv(csvpath, index=False, columns=cols)
