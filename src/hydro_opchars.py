@@ -89,25 +89,28 @@ def adjust_mean_const(b, min_, max_):
             extra = c[c > max_] - max_[c > max_]
             c1[c > max_] = max_[c > max_]
             c1[c < min_] += extra.sum()/(c<min_).sum()
-            #print(c1.mean(),c.mean())
+            print(c1.mean(),c.mean())
             c = c1.copy()
         if (c > min_).sum():
             extra = min_[c < min_] - c[c < min_]
             c1[c < min_] = min_[c < min_]
             c1[c > min_] -= extra.sum()/(c>min_).sum()
-            #print(c1.mean(),c.mean())
+            print(c1.mean(),c.mean())
         
         return c1
     
     c1 = adjust(b)
     #printcols(c1, min_, max_)
     n = 0
-    while n <10 and not np.all((c1 >= min_) & (c1 <= max_)):
+    while n <20 and not np.all((c1 >= min_) & (c1 <= max_)):
         #print(f"iteration {n}..")
         c1 = adjust(c1)
         #printcols(c1, min_, max_)
+        n += 1
+    if n ==20:
+        print("Failed to adjust mean")
     
-
+    print(b.mean(), c1.mean())
     return c1
 
 
