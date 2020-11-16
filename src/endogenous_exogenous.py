@@ -17,7 +17,11 @@ def read_availabilty_results(conn, scenario_name, project):
     """
     table = common.get_table_dataframe(conn, "results_project_availability_endogenous")
     scenario_id = get_scenario_id(conn, scenario_name)
-    return table[(table.project == project) & (table.scenario_id == scenario_id)]
+    r = table[(table.project == project) & (table.scenario_id == scenario_id)]
+    if r.shape[0] >0:
+        return r
+    else:
+        raise common.NoEntriesError(f"Availability results for {project} and {scenario_name} are not there in table results_project_availability_endogenous")
 
 
 @functools.lru_cache(maxsize=None)
@@ -52,6 +56,7 @@ def get_scenario_id(conn, scenario_name):
 class TemporalSpecsMisMatch(Exception):
     pass
 
+
 def get_start_end_(df, horizon, temporal_scenario_id):
     df = df[(df.horizon == str(horizon)) &
             (df.temporal_scenario_id == temporal_scenario_id)]
@@ -64,6 +69,7 @@ def get_start_end(df, horizon, temp_scena_id):
         return get_start_end_(df, horizon, temp_scena_id)
     else:
         return [get_start_end_(df, h, temp_scena_id) for h in horizon]
+
 
 def create_array(start, end):
     return np.arange(start, end+1)
@@ -177,8 +183,6 @@ def get_exogenous_results_(conn,
                          scenario1, scenario2, scenario3)
     params = (monthly, scenario2, scenario3, project, colnames, exo_id_value)
     horizons = list(hdict.keys())
-
-
     
     total_df = create_table_for_horizon(conn,hdict[horizons[0]], *params)
     for horizon in horizons[1:]:
@@ -237,11 +241,13 @@ def merge_in_csv(results,
     
 def write_exogenous_results_csv(results,
                                 project,
-                                csv_location):
+                                csv_location,
+                                description):
     subscenario = 'exogenous_availability_scenario_id'
     subscenario_id = results.iloc[0][subscenario]
     csvpath = common.get_subscenario_csvpath(project, subscenario,
-                                             subscenario_id, csv_location)
+                                             subscenario_id, csv_location,
+                                             description)
     merge_in_csv(results, csvpath)
     return subscenario, subscenario_id
 
@@ -258,7 +264,9 @@ def write_exogenous_via_gridpath_script(scenario1,
                                         project,
                                         csv_location,
                                         gridpath_rep,
-                                        db_path):
+                                        db_path,
+                                        description,
+                                        update_database):
     results,monthly = get_exogenous_results(scenario1,
                                             scenario2,
                                             scenario3,
@@ -267,17 +275,20 @@ def write_exogenous_via_gridpath_script(scenario1,
                                             db_path)
     subscenario, subscenario_id = write_exogenous_results_csv(results,
                                                               project,
-                                                              csv_location)
+                                                              csv_location,
+                                                              description)
     if not scenario3:
         csvpath = common.get_subscenario_csvpath(project,
                                                  subscenario,
                                                  subscenario_id,
-                                                 csv_location)
+                                                 csv_location,
+                                                 description)
         merge_in_csv(monthly, csvpath)
 
-    common.update_subscenario_via_gridpath(subscenario, subscenario_id,
-                                           project, csv_location, db_path,
-                                           gridpath_rep)
+    if update_database:
+        common.update_subscenario_via_gridpath(subscenario, subscenario_id,
+                                               project, csv_location, db_path,
+                                               gridpath_rep)
 
     
 def find_projects(scenario1, type_, webdb):
@@ -308,23 +319,27 @@ def endogenous_to_exogenous(scenario1:str,
                             database:str,
                             gridpath_rep:str,
                             skip_scenario2:bool,
-                            dev:bool):
+                            project:str,
+                            description:str,
+                            update_database:bool):
 
     projs = find_projects_to_copy(scenario1, scenario2, database)
-    if dev:
-        projs = projs[:1]
+    if project:
+        projs = [project]
     
     if not skip_scenario2:
-        for project in projs:
-            print(f"Starting {project} for {scenario2} ...")
+        for project_ in projs:
+            print(f"Starting {project_} for {scenario2} ...")        
             write_exogenous_via_gridpath_script(scenario1,
                                                 scenario2,
                                                 scenario3=None,
                                                 fo=None,
-                                                project=project,
+                                                project=project_,
                                                 csv_location=csv_location,
                                                 gridpath_rep= gridpath_rep,
-                                                db_path=database)
+                                                db_path=database,
+                                                description=description,
+                                                update_database=update_database)
 
     if scenario3:
         if fo:
@@ -334,16 +349,18 @@ def endogenous_to_exogenous(scenario1:str,
                                nrows=35041,
                                usecols=projs)
         
-        for project in projs:
-            print(f"Starting {project} for {scenario3} ...")
+        for project_ in projs:
+            print(f"Starting {project_} for {scenario3} ...")
             write_exogenous_via_gridpath_script(scenario1,
                                                 scenario2,
                                                 scenario3,
                                                 fo,
-                                                project,
+                                                project_,
                                                 csv_location,
                                                 gridpath_rep,
-                                                db_path=database)
+                                                db_path=database,
+                                                description=description,
+                                                update_database=update_database)
 
 
 @click.command()
@@ -355,7 +372,9 @@ def endogenous_to_exogenous(scenario1:str,
 @click.option("-d", "--database", default="../toy.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
 @click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2")
-@click.option("--dev/--no-dev", default=False, help="Run only for one project")
+@click.option("--project", default=None, help="Run only for one project")
+@click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
+@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
 def main(scenario1:str,
          scenario2:str,
          scenario3:str,
@@ -364,7 +383,9 @@ def main(scenario1:str,
          database:str,
          gridpath_rep:str,
          skip_scenario2:bool,
-         dev:bool):
+         project:str,
+         description:str,
+         update_database:bool):
 
     """
     Usage: python endogenous_exogenous.py [OPTIONS]
@@ -398,7 +419,9 @@ def main(scenario1:str,
         database,
         gridpath_rep,
         skip_scenario2,
-        dev
+        project,
+        description,
+        update_database
     )
     
 if __name__ == "__main__":

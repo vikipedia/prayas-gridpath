@@ -11,8 +11,10 @@ class NoEntriesError(Exception):
 def get_field(webdb, table, field, **conds):
     r = webdb.where(table, **conds).first()
 
-    if not r:
+    if not r or field not in r:
         raise NoEntriesError(f"Field {field} not found in {table} for {conds}")
+    if not r[field]:
+        print(f"Warning: {field} from {table} for {conds} is empty or None")
     return r[field]
 
 
@@ -20,7 +22,11 @@ def get_table_dataframe(webdb:web.db.SqliteDB, table:str)->pd.DataFrame:
     """
     read table as dataframe. 
     """
-    return pd.DataFrame(webdb.select(table).list())
+    t = pd.DataFrame(webdb.select(table).list())
+    if t.shape[0]>0:
+        return t
+    else:
+        raise NoEntriesError(f"Table {table} is empty")
 
 
 def get_database(db_path):
@@ -40,13 +46,22 @@ def get_subscenario_path(csv_location, subscenario):
     return os.path.join(csv_location, row['path'])
 
 
-def get_subscenario_csvpath(project, subscenario, subscenario_id, csv_location):
+def get_subscenario_csvpath(project,
+                            subscenario,
+                            subscenario_id,
+                            csv_location, description="description"):
     path = get_subscenario_path(csv_location, subscenario)
     csvs = [f for f in os.listdir(path) if f.startswith(f"{project}-{subscenario_id}")]
     if csvs:
         return os.path.join(path, csvs[0])
     else:
-        raise Exception(f"CSV not found for {project}-{subscenario_id}")    
+        print(f"CSV not found for {project}-{subscenario_id}")
+        filename = f"{project}-{subscenario_id}-{description}.csv"
+        print(f"Creating  {filename}")
+        fpath = os.path.join(path, filename)
+        with open(fpath, "w+") as f:
+            f.write("stage_id,timepoint,availability_derate")
+        return fpath
 
     
 def create_command(subscenario, subscenario_id, project, csv_location,

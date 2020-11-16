@@ -11,8 +11,11 @@ def hydro_op_chars_inputs_(webdb, project,
     rows = webdb.where("inputs_project_hydro_operational_chars",
                        project=project,
                        hydro_operational_chars_scenario_id=hydro_op_chars_sid,
-                       balancing_type_project=balancing_type_project)
-    return pd.DataFrame(rows.list())
+                       balancing_type_project=balancing_type_project).list()
+    if rows:
+        return pd.DataFrame(rows)
+    else:
+        raise common.NoEntriesError(f"Table inputs_project_hydro_operational_chars has no entries for project={project}, hydro_op_chars_scenario_id={hydro_op_chars_sid}, balancing_type_project={balancing_type_project}")
 
 
 def hydro_op_chars_inputs(webdb, scenario, project):
@@ -199,31 +202,33 @@ def hydro_op_chars(scenario1,
                    csv_location,
                    database,
                    gridpath_rep,
-                   dev):
+                   project,
+                   update_database):
     webdb = common.get_database(database)
     projects = get_projects(webdb, scenario1)
-    if dev:
-        projects = ["Koyna_Stage_1"]#projects[:1]
+    if project:
+        projects = [project]#projects[:1]
 
     subscenario = "hydro_operational_chars_scenario_id"
-    for project in projects:
-        print(f"Computing data for {project}")
-        subscenario_id = get_hydro_ops_chars_sceanario_id(webdb, scenario2, project)
+    for project_ in projects:
+        print(f"Computing data for {project_}")
+        subscenario_id = get_hydro_ops_chars_sceanario_id(webdb, scenario2, project_)
 
-        results = adjusted_mean_results(webdb, scenario1, scenario2, project)
+        results = adjusted_mean_results(webdb, scenario1, scenario2, project_)
         write_results_csv(results,
-                          project,
+                          project_,
                           subscenario,
                           subscenario_id,
                           csv_location)
-        """
-        common.update_subscenario_via_gridpath(subscenario,
-                                               subscenario_id,
-                                               project,
-                                               csv_location,
-                                               database,
-                                               gridpath_rep)
-        """
+        if update_database:
+            print("Updating hydro opchars fails, so skipping updating")
+            #common.update_subscenario_via_gridpath(subscenario,
+            #                                       subscenario_id,
+            #                                       project_,
+            #                                       csv_location,
+            #                                       database,
+            #                                       gridpath_rep)
+        
         
 @click.command()
 @click.option("-s1", "--scenario1", default="toy1_pass1", help="Name of scenario1")
@@ -231,13 +236,15 @@ def hydro_op_chars(scenario1,
 @click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
 @click.option("-d", "--database", default="../toy.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
-@click.option("--dev/--no-dev", default=False, help="skip copying for senario2")
+@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
+@click.option("--project", default=None, help="Run for only one project")
 def main(scenario1,
          scenario2,
          csv_location,
          database,
          gridpath_rep,
-         dev
+         project,
+         update_database
          ):
 
     hydro_op_chars(scenario1,
@@ -245,7 +252,8 @@ def main(scenario1,
                    csv_location,
                    database,
                    gridpath_rep,
-                   dev)
+                   project,
+                   update_database)
 
 def test():    
     webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath/mh.db")
