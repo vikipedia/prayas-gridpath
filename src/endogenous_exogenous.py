@@ -74,7 +74,32 @@ def get_start_end(df, horizon, temp_scena_id):
 def create_array(start, end):
     return np.arange(start, end+1)
 
+webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/mh.db")
+
+def filtered_table(webdb, table, **conds):
+    rows = webdb.where(table, **conds).list()
+    if rows:
+        return pd.DataFrame(rows)
+    else:
+        raise common.NoEntriesError(f"No entries in {table} for {conds}")
+
+def find_timepoints_(conn, horizon, scenario):
+    temp_scena_id = get_temporal_scenario_id(conn, scenario)
+    horizon_sub_problem_timepoints = filtered_table(conn,
+                                                    "inputs_temporal_horizon_timepoints",
+                                                    temporal_scenario_id=temp_scena_id,
+                                                    horizon=horizon
+                                                    )
+    subproblem_id = horizon_sub_problem_timepoints.groupby("subproblem_id").max().index[0]
+    spinup_subproblem_timepoints = filtered_table(conn,
+                                                  "inputs_temporal",
+                                                  temporal_scenario_id=temp_scena_id,
+                                                  spinup_or_lookahead=0,
+                                                  subproblem_id=str(subproblem_id))
+    return spinup_subproblem_timepoints['timepoint']
     
+
+
 def find_timepoints(conn, horizon, scenario):
     temp_scena_id = get_temporal_scenario_id(conn, scenario)
     df = common.get_table_dataframe(conn,
@@ -103,9 +128,9 @@ def create_table_for_horizon(conn,
     HORIZON = list(horizon.keys())[0]
     row = monthly[monthly.timepoint == HORIZON].iloc[0]
     if scenario3:
-        timepoints = find_timepoints(conn, horizon[HORIZON], scenario3)
+        timepoints = find_timepoints_(conn, horizon[HORIZON], scenario3)
     else:
-        timepoints = find_timepoints(conn, horizon[HORIZON], scenario2)
+        timepoints = find_timepoints_(conn, horizon[HORIZON], scenario2)
     size = len(timepoints)
     project_ = get_generic_col(size, object, project)
     exo_id = get_generic_col(size, int, exo_id_value)
@@ -171,13 +196,14 @@ def get_exogenous_results_(conn,
     else:
         exo_id_value = get_exogenous_avail_id(conn, scenario2, project)
         r, c = monthly.shape
+        
         if r==365:
             result = monthly[['project', 'stage_id', 'timepoint', 'availability_derate']]
             exid  = np.empty_like(result['stage_id'])
             exid[:] = exo_id_value
             result['exogenous_availability_scenario_id'] = exid
             return result, monthly
-            
+         
 
     hdict = get_horizons(conn, monthly['timepoint'],
                          scenario1, scenario2, scenario3)
@@ -256,7 +282,12 @@ def combine_forced_outage(maintenance, fofull, project):
     m = maintenance['availability_derate'].copy()
     fo = fofull[project]
     return forced_outage.combine_fo_m(m, fo)
+
+def sanity_check(csvpath):
+    df = pd.read_csv(csvpath)
+    return df.shape[0] == len(df.timepoint.unique())
     
+
 def write_exogenous_via_gridpath_script(scenario1,
                                         scenario2,
                                         scenario3,
@@ -277,15 +308,16 @@ def write_exogenous_via_gridpath_script(scenario1,
                                                               project,
                                                               csv_location,
                                                               description)
+
+    csvpath = common.get_subscenario_csvpath(project,
+                                             subscenario,
+                                             subscenario_id,
+                                             csv_location,
+                                             description)
     if not scenario3:
-        csvpath = common.get_subscenario_csvpath(project,
-                                                 subscenario,
-                                                 subscenario_id,
-                                                 csv_location,
-                                                 description)
         merge_in_csv(monthly, csvpath)
 
-    if update_database:
+    if update_database and sanity_check(csvpath):
         common.update_subscenario_via_gridpath(subscenario, subscenario_id,
                                                project, csv_location, db_path,
                                                gridpath_rep)
