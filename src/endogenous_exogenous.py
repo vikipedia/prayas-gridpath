@@ -285,7 +285,10 @@ def combine_forced_outage(maintenance, fofull, project):
 
 def sanity_check(csvpath):
     df = pd.read_csv(csvpath)
-    return df.shape[0] == len(df.timepoint.unique())
+    if df.shape[0] == len(df.timepoint.unique()):
+        return True
+    else:
+        print("Sanity check failed on {csvpath}, updating databse skipped")
     
 
 def write_exogenous_via_gridpath_script(scenario1,
