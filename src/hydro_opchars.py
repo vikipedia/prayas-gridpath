@@ -88,18 +88,23 @@ def adjust_mean_const(b, min_, max_):
     """
     def adjust(c):
         c1 = c.copy()
-        if (c < min_).sum():
-            extra = c[c > max_] - max_[c > max_]
-            c1[c > max_] = max_[c > max_]
-            c1[c < min_] += extra.sum()/(c<min_).sum()
-            print(c1.mean(),c.mean())
-            c = c1.copy()
-        if (c > min_).sum():
-            extra = min_[c < min_] - c[c < min_]
-            c1[c < min_] = min_[c < min_]
-            c1[c > min_] -= extra.sum()/(c>min_).sum()
-            print(c1.mean(),c.mean())
+        less, more, between = c < min_, c > max_, (c >= min_) & (c <= max_)
+
+        if less.sum() and more.sum():
+            #print("+-"*5)
+            c1[less] += (c1[more]- max_[more]).sum()/less.sum()
+            c1[more] = max_[more]
+        elif more.sum():
+            #print("+"*5)
+            c1[between] += (c1[more] - max_[more]).sum()/between.sum()
+            c1[more] = max_[more]
+        elif less.sum():
+            #print("-"*5)
+            c1[between] -= (min_[less] - c1[less]).sum()/between.sum()
+            c1[less] = min_[less]
         
+
+        #print(c.mean(), c1.mean())
         return c1
     
     c1 = adjust(b)
@@ -113,7 +118,7 @@ def adjust_mean_const(b, min_, max_):
     if n ==20:
         print("Failed to adjust mean")
     
-    print(b.mean(), c1.mean())
+    #print(b.mean(), c1.mean())
     return c1
 
 
@@ -156,12 +161,12 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project):
     power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
     cuf =  power_mw_df['power_mw']/capacity
-    #print(df.columns)
     min_, max_ = [df[c] for c in cols[-2:]]
-    #printcols(cuf, min_, max_)
+
     if len(cuf) > len(min_):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2)
         cuf = power_mw_df['power_mw']/capacity
+        
     avg = adjust_mean_const(cuf, min_, max_)
     results = df[cols]
     del results['average_power_fraction']
@@ -186,9 +191,10 @@ def write_results_csv(results,
                       project,
                       subscenario,
                       subscenario_id,
-                      csv_location):
+                      csv_location,
+                      description):
     csvpath = common.get_subscenario_csvpath(project, subscenario,
-                                             subscenario_id, csv_location)
+                                             subscenario_id, csv_location, description)
     cols = ["balancing_type_project", "horizon", "period",
             "average_power_fraction","min_power_fraction", "max_power_fraction"]
     on = 'horizon'
@@ -203,7 +209,8 @@ def hydro_op_chars(scenario1,
                    database,
                    gridpath_rep,
                    project,
-                   update_database):
+                   update_database,
+                   description):
     webdb = common.get_database(database)
     projects = get_projects(webdb, scenario1)
     if project:
@@ -219,7 +226,8 @@ def hydro_op_chars(scenario1,
                           project_,
                           subscenario,
                           subscenario_id,
-                          csv_location)
+                          csv_location,
+                          description)
         if update_database:
             print("Updating hydro opchars fails, so skipping updating")
             #common.update_subscenario_via_gridpath(subscenario,
@@ -236,15 +244,17 @@ def hydro_op_chars(scenario1,
 @click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
 @click.option("-d", "--database", default="../toy.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
-@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
 @click.option("--project", default=None, help="Run for only one project")
+@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
+@click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
 def main(scenario1,
          scenario2,
          csv_location,
          database,
          gridpath_rep,
          project,
-         update_database
+         update_database,
+         description
          ):
 
     hydro_op_chars(scenario1,
@@ -253,15 +263,85 @@ def main(scenario1,
                    database,
                    gridpath_rep,
                    project,
-                   update_database)
+                   update_database,
+                   description)
 
-def test():    
+def dbtest():    
     webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath/mh.db")
     scenario1 = "rpo30_pass1"
     scenario2 = 'rpo30_pass2'
     project = 'Koyna_Stage_3'
     adjusted_mean_results(webdb, scenario1, scenario2, project)
 
+
+    
+def test_1():
+    datapath = "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/opchar/hydro_opchar/hydro-daily-limits-rpo30.xlsx"
+    project = 'Koyna_Stage_1'
+    hydro_dispatch = pd.read_excel(datapath, sheet_name=project, nrows=365)
+    #hydro_dispatch = hydro_dispatch.dropna(axis=0)
+    b = hydro_dispatch['avg']
+    min_ = hydro_dispatch['min']
+    max_ = hydro_dispatch['max']
+    b1 = adjust_mean_const(b, min_, max_)
+    printcols(b, b1)
+    assert np.all(abs(b - b1) <= 0.001)
+
+    
+def test_compare_with_db():
+
+    def get_db_results():
+        subscenario_id = get_hydro_ops_chars_sceanario_id(webdb,
+                                                          compare_scenario,
+                                                          project)
+        rows = webdb.where("inputs_project_hydro_operational_chars",
+                           project=project,
+                           hydro_operational_chars_scenario_id=subscenario_id).list()
+        return pd.DataFrame(rows)
+        
+    
+    gridpath = "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath"
+    database = os.path.join(gridpath, "mh.db")
+    csv_location = os.path.join(gridpath, "db", "csvs_mh")
+    
+    scenario1 = "rpo50S3_pass1_2"
+    scenario2 = "rpo50S3_pass2"
+    compare_scenario = "rpo50S3_pass2"
+    project = "Sardar_Sarovar_CHPH"
+
+    webdb = common.get_database(database)
+    subscenario = "hydro_operational_chars_scenario_id"
+    print(f"Computing data for {project}")
+    subscenario_id = get_hydro_ops_chars_sceanario_id(webdb, scenario2, project)
+    results = adjusted_mean_results(webdb, scenario1, scenario2, project)
+    write_results_csv(results,
+                      project,
+                      subscenario,
+                      subscenario_id,
+                      csv_location,
+                      "rpo50S3_all")
+
+    csvpath = common.get_subscenario_csvpath(project, subscenario,
+                                             subscenario_id, csv_location, "rpo50S3_all")
+    filedata = pd.read_csv(csvpath)
+    filedata.set_index("horizon", inplace=True)
+    dailyfile = filedata[filedata.balancing_type_project=="month"]
+    b1 = dailyfile['average_power_fraction']
+    
+    dbdata = get_db_results()
+    dbdata.set_index('horizon', inplace=True)
+    dailydb = dbdata[dbdata.balancing_type_project=="month"]
+    b2 = dailydb['average_power_fraction']
+    
+    printcols(b1, b2, b1.index, b2.index)
+    diff = abs(b1-b2)>= 0.001
+    printcols(b1[diff], b2[diff], b1.index[diff], b2.index[diff])
+    assert np.all(abs(b1-b2)<=0.001)
+
+    
+    
+    
+#test_compare_with_db()
 
 if __name__ == "__main__":
     main()
