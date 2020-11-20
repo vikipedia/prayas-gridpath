@@ -229,13 +229,12 @@ def hydro_op_chars(scenario1,
                           csv_location,
                           description)
         if update_database:
-            print("Updating hydro opchars fails, so skipping updating")
-            #common.update_subscenario_via_gridpath(subscenario,
-            #                                       subscenario_id,
-            #                                       project_,
-            #                                       csv_location,
-            #                                       database,
-            #                                       gridpath_rep)
+            common.update_subscenario_via_gridpath(subscenario,
+                                                   subscenario_id,
+                                                   project_,
+                                                   csv_location,
+                                                   database,
+                                                   gridpath_rep)
         
         
 @click.command()
