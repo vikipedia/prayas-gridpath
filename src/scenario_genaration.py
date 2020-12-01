@@ -159,7 +159,7 @@ class Temporal_Scenario_Id(Subscenario):
                       "day":365}
                       #"hour":365*24,
                       #"15min":365*96}
-    GRAN = {1:"year",
+    GRAN = {1:"yearly",
             12:"monthly",
             365:"daily",
             365*24:"hourly",
@@ -278,7 +278,7 @@ def get_subproblem_id_index(balancing_type_horizon, s1):
     elif balancing_type_horizon == 'year':
         index = pd.Index(data=s1['period'].unique(), name='period')
     elif balancing_type_horizon == 'day':
-        index = pd.MultiIndex.from_arrays([s1['d'].unique(), s1['m'].unique()], names=['d','m'])
+        index = pd.MultiIndex.from_arrays([s1['d'], s1['m']], names=['d','m']).unique()
     else:
         raise ValueError(f"Incompatible balancing_type_horizon {balancing_type_horizon}")
 
@@ -288,25 +288,8 @@ def get_subproblem_id(index):
     subproblem_id = pd.Series(data=range(1, len(index)+1), index=index, name='subproblem_id')
     return subproblem_id
 
-    
-def create_structure(base:Temporal_Scenario_Id,
-                     balancing_type_horizon:str,
-                     granularity:str):
-    ns = [key for key, value in base.GRAN.items() if value == granularity]
-    if not ns:
-        raise ValueError("Invalid granularity specified. valid granularity values are {}".format(base.GRAN.values()))
-    
-    size = ns[0]
-    structure = base.structure
-    s = structure[structure.spinup_or_lookahead==0]
-    ts = s.timestamp.str.split("-", expand=True)
-    ts.columns = ['d', 'm', 'ys']
-    ts1 = ts.ys.str.split(expand=True)
-    del ts['ys']
-    ts['y'] = ts1[0]
-    ts['ts'] = ts1[1]
-    s1 = s.join(ts)
 
+def get_groupby_cols(granularity):
     common = ['stage_id', 'period']
     if granularity == "daily":
         grpbycols = ['d', 'm']
@@ -314,10 +297,44 @@ def create_structure(base:Temporal_Scenario_Id,
         grpbycols = ['m'] 
     elif granularity == "yearly":
         grpbycols = []
+    elif granularity == "hourly" :
+        grpbycols = ['d','m','H']
+    elif granularity == "15min" :
+        grpbycols = ['d','m','H','M']
     else:
         raise ValueError(f"Incompatible granularity {granularity}")
 
     grpbycols.extend(common)
+    return grpbycols
+
+
+def split_timestamp(s):
+    ts = s.timestamp.str.split("-", expand=True)
+    ts.columns = ['d', 'm', 'ys']
+    ts1 = ts.ys.str.split(expand=True)
+    del ts['ys']
+    ts['y'] = ts1[0]
+    ts2 = ts1[1].str.split(":", expand=True)
+    ts['H'] = ts2[0]
+    ts['M'] = ts2[1]
+    return ts    
+
+
+def create_structure(base:Temporal_Scenario_Id,
+                     balancing_type_horizon:str,
+                     granularity:str):
+
+    ns = [key for key, value in base.GRAN.items() if value == granularity]
+    if not ns:
+        raise ValueError("Invalid granularity specified. valid granularity values are {}".format(base.GRAN.values()))
+    
+    size = ns[0]
+    structure = base.structure
+    s = structure[structure.spinup_or_lookahead==0]
+    ts = split_timestamp(s)
+    s1 = s.join(ts)
+
+    grpbycols = get_groupby_cols(granularity)
     fcols = ['timepoint_weight', 'previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint', 'month', 'hour_of_day', 'timestamp']
     scols = ['number_of_hours_in_timepoint']
     
@@ -325,7 +342,7 @@ def create_structure(base:Temporal_Scenario_Id,
 
     firstcols = grp[fcols].first()
     sumcols = grp[scols].sum()
-    sumcols = sumcols.astype(int)
+    #sumcols = sumcols.astype(int)
 
     index = get_subproblem_id_index(balancing_type_horizon, s1)
     subproblem_id = get_subproblem_id(index)
@@ -333,8 +350,9 @@ def create_structure(base:Temporal_Scenario_Id,
                         index = index,
                         name = "horizon_" + balancing_type_horizon)
     s_ = firstcols.join(sumcols).join(subproblem_id).join(horizon)
-
+    
     s_  = create_timepoint_col(s_, horizon, 'timepoint')
+    s_['linked_timepoint'].iloc[:] = 0
     colnames = ['subproblem_id','stage_id','timepoint','period','number_of_hours_in_timepoint','timepoint_weight','previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint','month','hour_of_day','timestamp',horizon.name]
     return s_[colnames]
 
@@ -349,12 +367,15 @@ def create_timepoint_col(s_, horizon, tindex):
 
     s_.sort_values('timestamp_', inplace=True)
     s_.reset_index(inplace=True)
-    
-    index = pd.MultiIndex.from_arrays([s_['timestamp_'], s_[horizon.name]], names=['timestamp_', horizon.name])
-    timepoint = pd.Series(data = range(1, len(index)+1), name='timepoint', index=index)
-    s_.set_index(['timestamp_', horizon.name], inplace=True)
+    grpbyhorizon = s_.groupby(horizon.name)
+    def get_time(h):
+        return grpbyhorizon['timestamp_'].first()[h]
+        
+    lens = [len(s_[s_[horizon.name]==h]) for h in sorted(s_[horizon.name].unique(),
+                                                         key=get_time)]
+    data = sum([list(range(1, n+1)) for n in lens], start=[])
+    timepoint = pd.Series(data = data, name='timepoint')
     s_ = s_.join(timepoint)
-    s_.reset_index(inplace=True)
 
     df = s_[[horizon.name, 'timepoint']].astype(str)
     s_['timepoint'] = pd.to_numeric(df[horizon.name] + df['timepoint'].str.zfill(len(str(max(df['timepoint'], key=len)))))
