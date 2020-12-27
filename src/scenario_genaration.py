@@ -60,10 +60,10 @@ class Scenario(CSVLocation):
 
 
 def test_scenario_class():
-    rpo30 = Scenario("/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh", "rpo30")
+    rpo30 = Scenario("/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh", "rpo30")
     
     assert rpo30.scenario_name == "rpo30"
-    assert rpo30.csv_location == "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh"
+    assert rpo30.csv_location == "/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh"
     assert rpo30.temporal_scenario_id == 5
     assert rpo30.load_zone_scenario_id == 1
     assert rpo30.load_scenario_id == 1
@@ -88,6 +88,7 @@ class Subscenario(CSVLocation):
         try:
             self.__find_files()
         except Exception as e:
+            print(e)
             print("Creating empty Subscenario")
 
     @functools.lru_cache(maxsize=None)
@@ -130,94 +131,202 @@ class Subscenario(CSVLocation):
     def __find_files(self):
         master = self.get_csv_data_master()
         p = re.compile(f"{self.id_}_.*")
+        p_ = re.compile(f".*-{self.id_}.*.csv")
         with open(master) as f:
             csvf = csv.DictReader(f)
             rows = [row for row in csvf if row['subscenario']==self.name]
             sub_types = [row['subscenario_type'] for row in rows]
+            project_input = [row['project_input'] for row in rows]
             filenames = [r['filename'] for r in rows if r['filename']]
             if "dir_subsc_only" in sub_types:
                 self.sub_type = "dir_subsc_only"
                 subfolders = [f for f in os.listdir(self.get_folder()) if p.match(f)]
                 path = os.path.join(self.get_folder(), subfolders[0])
                 files = [os.path.join(path, f) for f in filenames]
-            if "simple" in sub_types:
+            elif "simple" in sub_types:
                 self.sub_type = "simple"
                 path = self.get_folder()
+                if '1' in project_input:
+                    p = p_
+                    
                 files = [os.path.join(path, f) for f in os.listdir(self.get_folder()) if p.match(f)]
-            self.path = path
             self.files = files
-
+            
+           
     def get_files(self):
         return self.files
 
-class Temporal_Scenario_Id(Subscenario):
-    """Documentation for Temporal_Scenario_Id
 
-    """
-    BALANCING_TYPE = {"year":1,
-                      "month":12,
-                      "day":365}
-                      #"hour":365*24,
-                      #"15min":365*96}
-    GRAN = {1:"yearly",
-            12:"monthly",
-            365:"daily",
-            365*24:"hourly",
-            365*96:"15min"}
-    
-    def __init__(self, id_, csv_location):
-        super(Temporal_Scenario_Id, self).__init__("temporal_scenario_id", id_, csv_location)
-        
-    def get_timepoints(self):
-        s = self.structure
-        s = s[s.spinup_or_lookahead==0]
-        return s['timepoint']
-
-    def get_balancing_type_horizon(self):
-        hparams = self.horizon_params
-        return hparams['balancing_type_horizon'].unique()[0]
-
-    def get_period(self):
-        return self.period_params['period'].iloc[0]
-
-
-    def create_new_subscenario(self,
-                               balancing_type_horizon,
-                               granularity,
-                               id_):
-        
+    def writedata(self, subfolder, **kwargs):##FIXME
         def checkexisting(folder):
             
-            return os.path.exists(folder) and [f for f in os.listdir(folder) if f.startswith(str(id_))]
+            return os.path.exists(folder) and self.files
 
         def writefile(**data):
             for name, value in data.items():
-                value.to_csv(os.path.join(tscid_folder,name+".csv"),index=False)
+                path = os.path.join(scid_folder,name+".csv")
+                if os.path.exists(path):
+                    print(f"File {name}.csv exists, skipping!")
+                else:
+                    value.to_csv(path, index=False, date_format='%d-%m-%Y %H:%M')
 
-
-        structure,horizon_params,horizon_timepoints, period_params = create_temporal_subscenario_data(self, balancing_type_horizon, granularity, id_)
+        if subfolder:
+            folder = self.get_folder()
+            scid_folder = os.path.join(folder, subfolder)
+        else:
+            scid_folder = self.get_folder()
         
-        folder = self.get_folder()
-        steps = len(structure['subproblem_id'].unique())
-        granularity = len(structure[structure.spinup_or_lookahead==0])
-        d = Temporal_Scenario_Id.GRAN
-        gran = d[granularity]
-        subfolder = f"{id_}_{steps}steps_{gran}_timepoints"
-        tscid_folder = os.path.join(folder, subfolder)
-        if checkexisting(tscid_folder):
-            raise Exception(f"Folder for temporal_scenario_id = {id_} exists")
-        os.makedirs(tscid_folder)
-        writefile(structure=structure)
-        writefile(horizon_params=horizon_params)
-        writefile(horizon_timepoints=horizon_timepoints)
-        writefile(period_params=period_params)
-        return Temporal_Scenario_Id(id_, self.csv_location)
+        try:
+            os.makedirs(scid_folder)
+        except Exception as e:
+            print(e)
+            print("Not creating folder, probably it exists")
 
+        for k, v in kwargs.items():
+            writefile(**{k:v})
+        self.__find_files()
+
+    def mergedata(self, merge_on:str, **kwargs):
+        """
+        only for those subscenarios for which data merging is possbible.
+        for example for exogenous_availability_scenario_id, data of 
+        different temporal settings can be stored in same file.
+        """
+        scid_folder = self.get_folder()
+        try:
+            os.makedirs(scid_folder)
+        except Exception as e:
+            print(e)
+            print("Not creating folder, probably it exists")
+
+        for name, value in kwargs.items():
+            path = os.path.join(scid_folder, name + ".csv")
+            if os.path.exists(path):
+                df = pd.read_csv(path)
+                df = df.merge(value, on=merge_on)
+            else:
+                df = value
+            
+            df.to_csv(path, index=False)
+            
+
+BALANCING_TYPE = {"year":1,
+                  "month":12,
+                  "day":365}
+                  #"hour":365*24,
+                  #"15min":365*96}
+GRAN = {1:"yearly",
+        12:"monthly",
+        365:"daily",
+        365*24:"hourly",
+        365*96:"15min"}
+    
 
 def test_temporal_scenario_id_class():
-    tmp5 = Temporal_Scenario_Id(5, "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh")
-    print(tmp5.structure.shape)
-    assert len(tmp5.get_timepoints())==365*96
+    tmp5 = Subscenario(5, "/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh")
+    s = tmp5.structure
+    assert len(s.timepoint[s.spinup_or_lookahead==0])==365*96
+
+def remove_subcenario(s):
+    for f in s.get_files():
+        os.remove(f)
+    folder = os.path.dirname(s.get_files()[0])
+    os.removedirs(folder)
+    
+def test_create_temporal_subscenario():
+
+    t1 = Subscenario('temporal_scenario_id', 1, CSV_LOCATION)
+
+    t75 = create_temporal_subscenario(t1, "month", 'daily', 75)
+    assert len(t75.structure)==365
+    assert len(t75.horizon_timepoints)==12
+    t76 = create_temporal_subscenario(t1, "year", 'daily', 76)
+    assert len(t76.structure)==365
+    assert len(t76.horizon_timepoints)==1
+    remove_subcenario(t75)
+    remove_subcenario(t76)
+    
+def create_temporal_subscenario(base:Subscenario,
+                                balancing_type_horizon:str,
+                                granularity:str,
+                                id_:int):
+    structure,horizon_params,horizon_timepoints, period_params = create_temporal_subscenario_data(base, balancing_type_horizon, granularity, id_)
+    steps = len(structure['subproblem_id'].unique())
+    granularity = len(structure[structure.spinup_or_lookahead==0])
+    d = GRAN
+    gran = d[granularity]
+    subfolder = f"{id_}_{steps}steps_{gran}_timepoints"
+    tscid = Subscenario(name='temporal_scenario_id',
+                       id_=id_,
+                       csv_location=base.csv_location)
+    tscid.writedata(subfolder,
+                    structure=structure,
+                    horizon_params=horizon_params,
+                    horizon_timepoints=horizon_timepoints,
+                    period_params=period_params)
+    return tscid
+
+
+def write_endo_project_file(filename, data, headers):
+    if os.path.exists(filename):
+        print(f"File {filename} exists, skipping overwrite.")
+    with open(filename, "w") as f:
+        csvf = csv.DictWriter(f, headers)
+        csvf.writerow(data)
+
+
+def get_project_filename(project, subscenario_id, subscenario_name):
+    return f"{project}-{subscenario_id}-{subscenario_name}.csv"
+    
+        
+def create_availability_subscenario(csv_location:str,
+                                    availability:str,
+                                    endogenous:str,
+                                    description:str,
+                                    id_:int
+                                    ):
+    """
+    csv_location -> csv_location
+    """
+    pascid = Subscenario(name = 'project_availability_scenario_id',
+                         id_= id_,
+                         csv_location = csv_location
+                         )
+    data = pd.read_csv(availability)
+    agg_data = pd.read_csv(endogenous)
+    availdata = data[data.endogenous_availability_scenario_id.notnull()]
+    if endogenous:
+        for project, endoscid_ in availdata[
+                ['project','endogenous_availability_scenario_id']].drop_duplicates().values:
+            endoscid = Subscenario('endogenous_availability_scenario_id',
+                                   endoscid_,
+                                   csv_location)
+
+            df = agg_data[(agg_data.subscenario_id == endoscid_) & (agg_data.project==project)]
+            cols = list(df.columns)
+            cols_ = ['project', 'subscenario_id', 'subscenario_name']
+            for c in cols_:
+                cols.remove(c)
+            projectdata = df[cols]
+            filename = get_project_filename(**df[cols_].iloc[0].to_dict())
+            try:
+                endoscid.writedata(None, **{filename:projectdata})
+            except Exception as e:
+                print("Exception in writing data", e)
+            
+    pascid.writedata(None, **{f"{id_}_availability_{description}":data})
+    return pascid
+
+
+def get_subset(temporal):
+    s = temporal.structure
+    s = s[s.spinup_or_lookahead==0]
+    s = s[['timepoint', 'timestamp']]
+    s['timestamp'] = pd.to_datetime(s.timestamp, format='%d-%m-%Y %H:%M')
+    s.sort_values('timestamp', inplace=True)
+    s.set_index('timestamp', inplace=True)
+    return s
+
 
 def create_horizon_or_timepoint(base, size):
     pad = len(str(size+1))
@@ -240,7 +349,7 @@ def create_horizon_params(base,
                           ):
 
     grp = structure.groupby("subproblem_id")
-    period = base.get_period()
+    period = base.period_params['period'].iloc[0]
     hname = 'horizon_'+balancing_type_horizon
     df = grp[[hname]].first().reset_index()
     n = len(df)
@@ -291,6 +400,7 @@ def get_subproblem_id(index):
 
 def get_groupby_cols(granularity):
     common = ['stage_id', 'period']
+
     if granularity == "daily":
         grpbycols = ['d', 'm']
     elif granularity == "monthly":
@@ -319,21 +429,60 @@ def split_timestamp(s):
     ts['M'] = ts2[1]
     return ts    
 
+def get_groupsby_structure(base:Subscenario, granularity):
+    structure = base.structure
+    s = structure[structure.spinup_or_lookahead==0]
+    ts = split_timestamp(s)
+    return s[['timepoint', 'timepoint_weight']].join(ts)
 
-def create_structure(base:Temporal_Scenario_Id,
+
+def subset_data(data, temporal:Subscenario):
+    s = temporal.structure
+    s = s[s.spinup_or_lookahead==0]
+    t = s[['timepoint']]
+    return t.merge(data, on='timepoint')
+
+
+def collapse(data,
+             columns,
+             basetemporal:Subscenario,
+             granularity,
+             subtemporal:Subscenario,
+             weighted=False,
+             operation='sum'):
+    ts = get_groupsby_structure(basetemporal, granularity)
+    grpbycols = get_groupby_cols(granularity)
+    grpbycols.remove('period')
+    grpbycols.remove('stage_id')
+    print(ts.columns)
+    data = data.merge(ts, on='timepoint')
+    data.sort_values('timepoint', inplace=True)
+    if weighted:
+        for c in columns:
+            data[c] = data.c*data.timepoint_weight
+    grp = data.groupby(grpbycols)[columns]
+    op = getattr(grp, operation)
+    r = op()
+    r.reset_index(inplace=True)
+    s = subtemporal.structure
+    s = s[s.spinup_or_lookahead==0]['timepoint']
+    s.sort_values()
+    r.join(s)
+    return r
+
+def create_structure(base:Subscenario,
                      balancing_type_horizon:str,
                      granularity:str):
 
-    ns = [key for key, value in base.GRAN.items() if value == granularity]
+    ns = [key for key, value in GRAN.items() if value == granularity]
     if not ns:
-        raise ValueError("Invalid granularity specified. valid granularity values are {}".format(base.GRAN.values()))
+        raise ValueError("Invalid granularity specified. valid granularity values are {}".format(GRAN.values()))
     
-    size = ns[0]
     structure = base.structure
     s = structure[structure.spinup_or_lookahead==0]
     ts = split_timestamp(s)
     s1 = s.join(ts)
-
+    
     grpbycols = get_groupby_cols(granularity)
     fcols = ['timepoint_weight', 'previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint', 'month', 'hour_of_day', 'timestamp']
     scols = ['number_of_hours_in_timepoint']
@@ -346,18 +495,18 @@ def create_structure(base:Temporal_Scenario_Id,
 
     index = get_subproblem_id_index(balancing_type_horizon, s1)
     subproblem_id = get_subproblem_id(index)
-    horizon = pd.Series(data=create_horizon(base.get_period(), len(index)),
+    horizon = pd.Series(data=create_horizon(base.period_params['period'].iloc[0], len(index)),
                         index = index,
                         name = "horizon_" + balancing_type_horizon)
     s_ = firstcols.join(sumcols).join(subproblem_id).join(horizon)
     
-    s_  = create_timepoint_col(s_, horizon, 'timepoint')
+    s_  = create_timepoint_col(s_, horizon)
     s_['linked_timepoint'].iloc[:] = 0
     colnames = ['subproblem_id','stage_id','timepoint','period','number_of_hours_in_timepoint','timepoint_weight','previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint','month','hour_of_day','timestamp',horizon.name]
     return s_[colnames]
 
 
-def create_timepoint_col(s_, horizon, tindex):
+def create_timepoint_col(s_, horizon):
     """
     s_ is dataframe containing columns with name timestamp in '%d-%m-%Y %H:%M' format
     make use
@@ -403,14 +552,17 @@ def create_horizon_timepoints(structure, balancing_type_horizon):
                'tmp_end']]
 
         
-def create_temporal_subscenario_data(base:Temporal_Scenario_Id,
+def create_temporal_subscenario_data(base:Subscenario,
                                      balancing_type_horizon:str,
                                      granularity:str,
                                      id_:int):
-    base_balancing_type = base.get_balancing_type_horizon()
-    bt = Temporal_Scenario_Id.BALANCING_TYPE
+    hparams = base.horizon_params
+    base_balancing_type = hparams['balancing_type_horizon'].unique()[0]
+    bt = BALANCING_TYPE
+    if balancing_type_horizon not in bt:
+        raise ValueError("Wrong input for steps, possible steps are")
     if bt[balancing_type_horizon] > bt[base_balancing_type]:
-        raise ValueError(f"New Scenario Can not have balancing_type_horizon={balancing_type_horizon}")
+        raise ValueError(f"New subscenario Can not have more steps than base subscenario")
     
     structure = create_structure(base, balancing_type_horizon, granularity)
     period_params = create_period_params(base)
@@ -420,23 +572,22 @@ def create_temporal_subscenario_data(base:Temporal_Scenario_Id,
     return structure,horizon_params,horizon_timepoints,period_params
     
 
-CSV_LOCATION = "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh"
+CSV_LOCATION = "/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh"
             
 def test_subscenario_class():
     rpo30 = Scenario(CSV_LOCATION, "rpo30")
-    assert rpo30.get_subscenario('temporal_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/period_params.csv', '/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/horizon_params.csv', '/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/structure.csv', '/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/horizon_timepoints.csv']
+    assert rpo30.get_subscenario('temporal_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/period_params.csv', '/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/horizon_params.csv', '/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/structure.csv', '/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/temporal/5_365steps_2030_15min_timepoints/horizon_timepoints.csv']
     
-    assert rpo30.get_subscenario('load_zone_scenario_id').get_files()==['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/system/load_zones/1_load_zone_msedcl_voll20.csv']
-    assert rpo30.get_subscenario('load_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/system/load/1_load_msedcl_5pc_all.csv', '/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/system/load/1_load_msedcl_5pc_all.txt']
-    assert rpo30.get_subscenario('project_portfolio_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/portfolios/1_portfolio_msedcl_2030_rpo30.csv']
-    assert rpo30.get_subscenario('project_operational_chars_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/opchar/3_opchar_msedcl_rpo30_daily.csv']
-    assert rpo30.get_subscenario('project_availability_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/availability/3_availability_rpo30.csv']
-    assert rpo30.get_subscenario('project_load_zone_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/load_zones/1_project_load_zones_msedcl.csv']
-    assert rpo30.get_subscenario('project_specified_capacity_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/specified/capacity/1_specified_msedcl_2030_rpo30.csv']
-    assert rpo30.get_subscenario('project_specified_fixed_cost_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/specified/fixed_cost/1_fc_msedcl_2030_rpo30.csv']
-    assert rpo30.get_subscenario('solver_options_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/solver/1_cplex_mipgap_0.5.txt', '/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/solver/1_cplex_mipgap_0.5.csv']
+    assert rpo30.get_subscenario('load_zone_scenario_id').get_files()==['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/system/load_zones/1_load_zone_msedcl_voll20.csv']
+    assert rpo30.get_subscenario('load_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/system/load/1_load_msedcl_5pc_all.csv', '/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/system/load/1_load_msedcl_5pc_all.txt']
+    assert rpo30.get_subscenario('project_portfolio_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/portfolios/1_portfolio_msedcl_2030_rpo30.csv']
+    assert rpo30.get_subscenario('project_operational_chars_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/opchar/3_opchar_msedcl_rpo30_daily.csv']
+    assert rpo30.get_subscenario('project_availability_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/availability/3_availability_rpo30.csv']
+    assert rpo30.get_subscenario('project_load_zone_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/load_zones/1_project_load_zones_msedcl.csv']
+    assert rpo30.get_subscenario('project_specified_capacity_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/specified/capacity/1_specified_msedcl_2030_rpo30.csv']
+    assert rpo30.get_subscenario('project_specified_fixed_cost_scenario_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/project/specified/fixed_cost/1_fc_msedcl_2030_rpo30.csv']
+    assert rpo30.get_subscenario('solver_options_id').get_files() == ['/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/solver/1_cplex_mipgap_0.5.txt', '/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh/solver/1_cplex_mipgap_0.5.csv']
     assert len(rpo30.get_subscenario('temporal_scenario_id').structure)==365*96
-
     
 
 def get_subscenarios(scenario, csv_location):
@@ -454,38 +605,105 @@ def get_subscenario_paths(csv_location):
     with open(csv_data_master) as f:
         csvf = csv.DictReader(f)
         return {r['subscenario']:fullpath(r['path']) for r in csvf if r['path']}
-    
+
+
+def create_project_operational_chars_subscenario(opchars_base:Subscenario,
+                                                 id_:int,
+                                                 balancing_type_project:str,
+                                                 desc:str):
+    opcharsscid = Subscenario(opchars_base.name, id_, opchars_base.csv_location)
+    df = opchars_base.data
+    ot = df.operational_type.str.replace("gen_commit_bin", "gen_commit_cap")
+    df['operational_type'] = ot
+    df.balancing_type_project = balancing_type_project
+    cols = ['fuel', 'heat_rate_curves_scenario_id', 'variable_om_curves_scenario_id', 'startup_chars_scenario_id', 'startup_cost_per_mw', 'shutdown_cost_per_mw', 'startup_fuel_mmbtu_per_mw', 'startup_plus_ramp_up_rate', 'shutdown_plus_ramp_down_rate', 'ramp_up_when_on_rate', 'ramp_down_when_on_rate', 'ramp_up_violation_penalty', 'ramp_down_violation_penalty', 'min_up_time_hours', 'min_up_time_violation_penalty', 'min_down_time_hours', 'min_down_time_violation_penalty', 'discharging_capacity_multiplier', 'minimum_duration_hours', 'maximum_duration_hours', 'aux_consumption_frac_capacity', 'last_commitment_stage', 'curtailment_cost_per_pwh', 'lf_reserves_up_derate', 'lf_reserves_down_derate', 'regulation_up_derate', 'regulation_down_derate', 'frequency_response_derate', 'spinning_reserves_derate', 'lf_reserves_up_ramp_rate', 'lf_reserves_down_ramp_rate', 'regulation_up_ramp_rate', 'regulation_down_ramp_rate', 'frequency_response_ramp_rate', 'spinning_reserves_ramp_rate']
+    df[cols] = np.nan
+    filename = f"{id_}_{desc}"
+    opcharsscid.writedata(None, **{filename:df})
+    return opcharsscid
+
+def next_available_subscenario_id(subscenario:Subscenario):
+    folder = subscenario.get_folder()
+    p = re.compile(r'(?P<id>\d{1,2})_.*')
+    files = [f for f in os.listdir(folder) if p.match(f)]
+    return max([int(p.match(f).groupdict()['id']) for f in files])+1
+
+def get_opchars_file_desc(opchars, currentsteps):
+    p = re.compile('{id}_(?P<desc>.*)_.+.csv'.format(id=opchars.id_))
+    m = p.match(os.path.basename(opchars.files[0]))
+    return "_".join([m.groupdict()['desc'],currentsteps+"ly"])
+
 def create_new_scenario(base_scenario,
                         output_scenario,
-                        csv_location):
+                        csv_location,
+                        steps,
+                        granularity,
+                        availability,
+                        endogenous):
     """
-    create a new scenario using a base scenario.
+    create a new scenario using a base scenario (assumed daily).
     In the new scenario temporal definations are 
     different. accordingly all time dependent files 
     should change.
     """
-    subscenarios = get_subscenarios(base_scenario, csv_location)
-    paths = get_subscenario_paths(csv_location)
-    for subscenario, sid in subscenarios.items():
-        if subscenario =="":
-            pass
+    base = Scenario(csv_location, base_scenario)
+    temporal_base = base.get_subscenario('temporal_scenario_id')
+    t_id = next_available_subscenario_id(temporal_base)
+    temporal = create_temporal_subscenario(temporal_base, steps, granularity, t_id)
+    project_availability_base = base.get_subscenario('project_availability_scenario_id')
+    pa_id = next_available_subscenario_id(project_availability_base)
+    project_availability = create_availability_subscenario(csv_location,
+                                                           availability,
+                                                           endogenous,
+                                                           description="endo",
+                                                           id_=pa_id)
+    popchars_base = base.get_subscenario('project_operational_chars_scenario_id')
+    popchars_id = next_available_subscenario_id(popchars_base)
+    desc = get_opchars_file_desc(popchars_base, steps)
+    popchars = create_project_operational_chars_subscenario(popchars_base,
+                                                            popchars_id,
+                                                            steps,
+                                                            desc
+                                                            )
 
-
-
+    scenarios = pd.read_csv(base.get_scenarios_csv())
+    scenarios.set_index('optional_feature_or_subscenarios', inplace=True)
+    c = scenarios[base_scenario].copy()
+    c['temporal_scenario_id'] = temporal.id_
+    c['project_operational_chars_scenario_id'] = popchars.id_
+    c['project_availability_scenario_id'] = project_availability.id_
+    scenarios[output_scenario] = c
+    scenarios.reset_index(inplace=True)
+    scenarios.to_csv(base.get_scenarios_csv(), index=False)
+    
+    
+    
 
 @click.command()
 @click.option("-b", "--base_scenario", default="rpo30", help="Base scenario from which other scenario will be generated.")
 @click.option("-o", "--output_scenario", default="rpo30_monthly", help="Name of scenario to generate")
-@click.option("-g", "--granularity", default="csvs_toy", help="Path to folder where csvs are")
+@click.option("-s", "--steps", default="month", help="steps as one of year, month, day")
+@click.option("-g", "--granularity", default="daily", help="granularity option as one of 15min, hourly, daily, monthly, yearly")
+@click.option("-a", "--availability", default=None, help="path to availability data")
+@click.option("-e", "--endo", default=None, help="Path to file which contains endogenous availability data in single file")
 @click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
 @click.option("--dev/--no-dev", default=False, help="Run only for one project")
 def main(base_scenario,
          output_scenario,
+         steps,
+         granularity,
+         availability,
+         endo,
          csv_location,
          dev):
     create_new_scenario(base_scenario,
                         output_scenario,
-                        csv_location)
+                        csv_location,
+                        steps,
+                        granularity,
+                        availability,
+                        endo
+                        )
     
 if __name__ == "__main__":
     main()
