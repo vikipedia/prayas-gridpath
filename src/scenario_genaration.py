@@ -6,6 +6,9 @@ import functools
 import pandas as pd
 import numpy as np
 import datetime
+import common
+
+class InvalidSubscenario(Exception):pass
 
 class CSVLocation(object):
     """Documentation for CSVLocation
@@ -138,11 +141,13 @@ class Subscenario(CSVLocation):
             sub_types = [row['subscenario_type'] for row in rows]
             project_input = [row['project_input'] for row in rows]
             filenames = [r['filename'] for r in rows if r['filename']]
+            files = []
             if "dir_subsc_only" in sub_types:
                 self.sub_type = "dir_subsc_only"
                 subfolders = [f for f in os.listdir(self.get_folder()) if p.match(f)]
                 path = os.path.join(self.get_folder(), subfolders[0])
                 files = [os.path.join(path, f) for f in filenames]
+                self.files = files
             elif "simple" in sub_types:
                 self.sub_type = "simple"
                 path = self.get_folder()
@@ -150,6 +155,8 @@ class Subscenario(CSVLocation):
                     p = p_
                     
                 files = [os.path.join(path, f) for f in os.listdir(self.get_folder()) if p.match(f)]
+            else:
+                raise InvalidSubscenario(f"Invalid subscenario {self.name}")
             self.files = files
             
            
@@ -433,7 +440,7 @@ def get_groupsby_structure(base:Subscenario, granularity):
     structure = base.structure
     s = structure[structure.spinup_or_lookahead==0]
     ts = split_timestamp(s)
-    return s[['timepoint', 'timepoint_weight']].join(ts)
+    return s[['timepoint', 'timepoint_weight', 'timestamp']].join(ts)
 
 
 def subset_data(data, temporal:Subscenario):
@@ -451,24 +458,37 @@ def collapse(data,
              weighted=False,
              operation='sum'):
     ts = get_groupsby_structure(basetemporal, granularity)
+    col_names = [c for c in data.columns]
     grpbycols = get_groupby_cols(granularity)
     grpbycols.remove('period')
     grpbycols.remove('stage_id')
-    print(ts.columns)
+    
     data = data.merge(ts, on='timepoint')
-    data.sort_values('timepoint', inplace=True)
     if weighted:
         for c in columns:
-            data[c] = data.c*data.timepoint_weight
-    grp = data.groupby(grpbycols)[columns]
-    op = getattr(grp, operation)
-    r = op()
-    r.reset_index(inplace=True)
+            data[c] = data[c]*data.timepoint_weight
+        grp = data.groupby(grpbycols)
+        opgrp = grp[columns]
+        weight = grp['timepoint_weight']
+        r = opgrp.sum()
+        for c in columns:
+            r[c] = r[c]/weight.sum()
+    else:
+        grp = data.groupby(grpbycols)
+        opgrp = grp[columns]    
+        op = getattr(opgrp, operation)
+        r = op()
+        
+    timestamp = grp[['timestamp']+[c for c in col_names if c not in columns and c!='timepoint']].first()
+    r = r.join(timestamp)
+    print(r)
+   
     s = subtemporal.structure
-    s = s[s.spinup_or_lookahead==0]['timepoint']
-    s.sort_values()
-    r.join(s)
-    return r
+    s = s[s.spinup_or_lookahead==0][['timepoint','timestamp']]
+    #s.sort_values(by='timepoint')
+    final_r = r.merge(s, on='timestamp')
+    final_r = final_r.sort_values(by="timepoint").reset_index()
+    return final_r[col_names]
 
 def create_structure(base:Subscenario,
                      balancing_type_horizon:str,
@@ -607,10 +627,44 @@ def get_subscenario_paths(csv_location):
         return {r['subscenario']:fullpath(r['path']) for r in csvf if r['path']}
 
 
+def update_variable_profile_opchar_scenario(vpop_scid,
+                                            project,
+                                            basetemporal:Subscenario,
+                                            subtemporal:Subscenario,
+                                            granularity,
+                                            description,
+                                            update=False):
+
+    f = common.get_subscenario_csvpath(project,
+                                       'variable_generator_profile_scenario_id',
+                                       vpop_scid,
+                                       basetemporal.csv_location,
+                                       description=description)
+    df = pd.read_csv(f)
+    basedf = subset_data(df, basetemporal)
+    if len(subset_data(df, subtemporal))==0 or update:
+        collapsed_df = collapse(basedf,
+                                ['cap_factor'],
+                                basetemporal,
+                                granularity,
+                                subtemporal,
+                                operation='mean')
+        common.merge_in_csv(collapsed_df,
+                            f,
+                            ['stage_id', 'timepoint', 'cap_factor'],
+                            on='timepoint')
+            
+
+    
 def create_project_operational_chars_subscenario(opchars_base:Subscenario,
                                                  id_:int,
                                                  balancing_type_project:str,
-                                                 desc:str):
+                                                 basetemporal,
+                                                 subtemporal,
+                                                 granularity,
+                                                 desc:str,
+                                                 update,
+                                                 hydroopchars_dir):
     opcharsscid = Subscenario(opchars_base.name, id_, opchars_base.csv_location)
     df = opchars_base.data
     ot = df.operational_type.str.replace("gen_commit_bin", "gen_commit_cap")
@@ -620,6 +674,21 @@ def create_project_operational_chars_subscenario(opchars_base:Subscenario,
     df[cols] = np.nan
     filename = f"{id_}_{desc}"
     opcharsscid.writedata(None, **{filename:df})
+
+    projects = df.project[df.operational_type=="gen_var"]
+    vpscid = df.variable_generator_profile_scenario_id[df.operational_type=='gen_var']
+    for vpop_scid, project in zip(projects, vpscid):
+        update_variable_profile_opchar_scenario(vpop_scid,
+                                                project,
+                                                basetemporal,
+                                                subtemporal,
+                                                granularity,
+                                                desc,
+                                                update)
+
+    
+
+    
     return opcharsscid
 
 def next_available_subscenario_id(subscenario:Subscenario):
@@ -632,6 +701,35 @@ def get_opchars_file_desc(opchars, currentsteps):
     p = re.compile('{id}_(?P<desc>.*)_.+.csv'.format(id=opchars.id_))
     m = p.match(os.path.basename(opchars.files[0]))
     return "_".join([m.groupdict()['desc'],currentsteps+"ly"])
+
+
+def update_load_scenario_id(load_scid,
+                            basetemporal,
+                            subtemporal,
+                            granularity,
+                            update):
+    lscid = Subscenario('load_scenario_id',
+                        load_scid, basetemporal.csv_location)
+    d = lscid.data
+    load_zones = d.load_zone.unique()
+    print(load_scid)
+    for zone in load_zones:
+        if len(subset_data(d, subtemporal))==0 or update:
+            d = subset_data(d[d.load_zone==zone], basetemporal)
+            cd = collapse(d,
+                          ['load_mw'],
+                          basetemporal,
+                          granularity,
+                          subtemporal,
+                          weighted=True,
+                          operation='mean')
+            return cd
+            #filename = lscid.get_files()[0]
+            #common.merge_in_csv(cd,
+            #                    filename,
+            #                    list(d.columns),
+            #                    on='timepoint')
+    
 
 def create_new_scenario(base_scenario,
                         output_scenario,
@@ -663,8 +761,18 @@ def create_new_scenario(base_scenario,
     popchars = create_project_operational_chars_subscenario(popchars_base,
                                                             popchars_id,
                                                             steps,
-                                                            desc
+                                                            base,
+                                                            temporal,
+                                                            granularity,
+                                                            desc,
+                                                            False,
+                                                            hydroopchars_dir
                                                             )
+    update_load_scenario_id(base.load_scenario_id,
+                            temporal_base,
+                            temporal,
+                            granularity,
+                            False)
 
     scenarios = pd.read_csv(base.get_scenarios_csv())
     scenarios.set_index('optional_feature_or_subscenarios', inplace=True)
