@@ -63,13 +63,28 @@ def get_subscenario_csvpath(project,
             f.write("stage_id,timepoint,availability_derate")
         return fpath
 
+def update_scenario_via_gridpath(scenario,
+                                 csv_location,
+                                 db_path,
+                                 gridpath_rep):
+    csv_path = os.path.join(csv_location, "scenarios.csv")
+    script = os.path.join(gridpath_rep, "db", "utilities", "scenario.py")
+    args = f"--database {db_path} --csv_path {csv_path} " \
+        f"--scenario {scenario}"
+
+    cmd =  " ".join(["python", script, args])
+    out_bytes = subprocess.check_output(cmd, shell=True)
+    print(out_bytes.decode())
+    
     
 def create_command(subscenario, subscenario_id, project, csv_location,
-                   db_path, gridpath_rep):
+                   db_path, gridpath_rep, delete=True):
     script = os.path.join(gridpath_rep, "db", "utilities", "port_csvs_to_db.py")
-    args = f"--database {db_path} --csv_location {csv_location}" \
-        f" --project {project} --delete --subscenario {subscenario} " \
-        f" --subscenario_id {subscenario_id}"
+    args = f"--database {db_path} --csv_location {csv_location} " \
+        f"--subscenario {subscenario} --subscenario_id {subscenario_id} --delete"
+    if project:
+        args = args + f" --project {project}"
+        
     return " ".join(["python", script, args])
 
     

@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import datetime
 import common
+import shutil
 
 class InvalidSubscenario(Exception):pass
 
@@ -267,6 +268,8 @@ def create_temporal_subscenario(base:Subscenario,
                        id_=id_,
                        csv_location=base.csv_location)
     tscid.writedata(subfolder,
+                    description=pd.DataFrame({f"{steps} steps":[],
+                                              f"{gran} timepoints":[]}),
                     structure=structure,
                     horizon_params=horizon_params,
                     horizon_timepoints=horizon_timepoints,
@@ -300,26 +303,31 @@ def create_availability_subscenario(csv_location:str,
                          csv_location = csv_location
                          )
     data = pd.read_csv(availability)
-    agg_data = pd.read_csv(endogenous)
     availdata = data[data.endogenous_availability_scenario_id.notnull()]
     if endogenous:
+        agg_data = pd.read_csv(endogenous)
         for project, endoscid_ in availdata[
                 ['project','endogenous_availability_scenario_id']].drop_duplicates().values:
             endoscid = Subscenario('endogenous_availability_scenario_id',
                                    endoscid_,
                                    csv_location)
 
+            print(endoscid_,"**"*10)
             df = agg_data[(agg_data.subscenario_id == endoscid_) & (agg_data.project==project)]
             cols = list(df.columns)
             cols_ = ['project', 'subscenario_id', 'subscenario_name']
             for c in cols_:
                 cols.remove(c)
             projectdata = df[cols]
-            filename = get_project_filename(**df[cols_].iloc[0].to_dict())
-            try:
-                endoscid.writedata(None, **{filename:projectdata})
-            except Exception as e:
-                print("Exception in writing data", e)
+            filename = common.get_subscenario_csvpath(project,
+                                                      'endogenous_availability_scenario_id',
+                                                      int(float(endoscid_)),
+                                                      endoscid.csv_location,
+                                                      "endo")
+            f = os.path.basename(filename.split(".")[0])
+            
+            endoscid.writedata(None, **{f:projectdata})
+            
             
     pascid.writedata(None, **{f"{id_}_availability_{description}":data})
     return pascid
@@ -447,7 +455,7 @@ def subset_data(data, temporal:Subscenario):
     s = temporal.structure
     s = s[s.spinup_or_lookahead==0]
     t = s[['timepoint']]
-    return t.merge(data, on='timepoint')
+    return t.merge(data, on='timepoint')[data.columns]
 
 
 def collapse(data,
@@ -481,11 +489,9 @@ def collapse(data,
         
     timestamp = grp[['timestamp']+[c for c in col_names if c not in columns and c!='timepoint']].first()
     r = r.join(timestamp)
-    print(r)
    
     s = subtemporal.structure
     s = s[s.spinup_or_lookahead==0][['timepoint','timestamp']]
-    #s.sort_values(by='timepoint')
     final_r = r.merge(s, on='timestamp')
     final_r = final_r.sort_values(by="timepoint").reset_index()
     return final_r[col_names]
@@ -521,7 +527,7 @@ def create_structure(base:Subscenario,
     s_ = firstcols.join(sumcols).join(subproblem_id).join(horizon)
     
     s_  = create_timepoint_col(s_, horizon)
-    s_['linked_timepoint'].iloc[:] = 0
+    s_['linked_timepoint'].iloc[:] = np.nan
     colnames = ['subproblem_id','stage_id','timepoint','period','number_of_hours_in_timepoint','timepoint_weight','previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint','month','hour_of_day','timestamp',horizon.name]
     return s_[colnames]
 
@@ -626,6 +632,26 @@ def get_subscenario_paths(csv_location):
         csvf = csv.DictReader(f)
         return {r['subscenario']:fullpath(r['path']) for r in csvf if r['path']}
 
+def collapse_variable_profile(vpop_scid,
+                              project,
+                              basetemporal:Subscenario,
+                              subtemporal:Subscenario,
+                              granularity):
+
+    f = common.get_subscenario_csvpath(project,
+                                       'variable_generator_profile_scenario_id',
+                                       vpop_scid,
+                                       basetemporal.csv_location)
+    df = pd.read_csv(f)
+    basedf = subset_data(df, basetemporal)
+    collapsed_df = collapse(basedf,
+                            ['cap_factor'],
+                            basetemporal,
+                            granularity,
+                            subtemporal,
+                            weighted='True')
+    return collapsed_df
+
 
 def update_variable_profile_opchar_scenario(vpop_scid,
                                             project,
@@ -643,12 +669,11 @@ def update_variable_profile_opchar_scenario(vpop_scid,
     df = pd.read_csv(f)
     basedf = subset_data(df, basetemporal)
     if len(subset_data(df, subtemporal))==0 or update:
-        collapsed_df = collapse(basedf,
-                                ['cap_factor'],
-                                basetemporal,
-                                granularity,
-                                subtemporal,
-                                operation='mean')
+        collapsed_df = collapse_variable_profile(vpop_scid,
+                                                 project,
+                                                 basetemporal,
+                                                 subtemporal,
+                                                 granularity)
         common.merge_in_csv(collapsed_df,
                             f,
                             ['stage_id', 'timepoint', 'cap_factor'],
@@ -664,7 +689,7 @@ def create_project_operational_chars_subscenario(opchars_base:Subscenario,
                                                  granularity,
                                                  desc:str,
                                                  update,
-                                                 hydroopchars_dir):
+                                                 hydroopchars_dir=None):
     opcharsscid = Subscenario(opchars_base.name, id_, opchars_base.csv_location)
     df = opchars_base.data
     ot = df.operational_type.str.replace("gen_commit_bin", "gen_commit_cap")
@@ -677,8 +702,8 @@ def create_project_operational_chars_subscenario(opchars_base:Subscenario,
 
     projects = df.project[df.operational_type=="gen_var"]
     vpscid = df.variable_generator_profile_scenario_id[df.operational_type=='gen_var']
-    for vpop_scid, project in zip(projects, vpscid):
-        update_variable_profile_opchar_scenario(vpop_scid,
+    for vpop_scid, project in zip(vpscid, projects):
+        update_variable_profile_opchar_scenario(int(vpop_scid),
                                                 project,
                                                 basetemporal,
                                                 subtemporal,
@@ -686,16 +711,56 @@ def create_project_operational_chars_subscenario(opchars_base:Subscenario,
                                                 desc,
                                                 update)
 
-    
 
-    
+    gen_hydro = df.operational_type=="gen_hydro"
+    hprojects = df.project[gen_hydro]
+    hopcscid = df.hydro_operational_chars_scenario_id[gen_hydro]
+
+    if balancing_type_project!="year":
+        print("Skipping hydro_operational_chars_scenario_id")
+    else:
+        if hydroopchars_dir:
+            for hopc_scid, project in zip(hopcscid, hprojects):
+                csvs = [f for f in os.listdir(hydroopchars_dir) if f.startswith(f"{project}-{hopc_scid}")]
+                if csvs:
+                    filename = os.path.join(hydroopchars_dir, csvs[0])
+                    dest = common.get_subscenario_csvpath(project,
+                                                          'hydro_operational_chars_scenario_id',
+                                                          int(hopc_scid),
+                                                          basetemporal.csv_location,
+                                                          description=desc)
+                    print(f"Copying data to {dest}")
+                    shutil.copy(filename, dest)
+
+        else:
+            for hopc_scid, project in zip(hopcscid, hprojects):
+                write_hydro_opchars_year_data(project,
+                                              int(hopc_scid),
+                                              basetemporal.csv_location,
+                                              desc)
     return opcharsscid
+
+
+def write_hydro_opchars_year_data(project,
+                                  hydro_operational_chars_scenario_id,
+                                  csv_location,
+                                  description):
+    path = common.get_subscenario_csvpath(project, 'hydro_operational_chars_scenario_id',
+                                          hydro_operational_chars_scenario_id,
+                                          csv_location, description)
+    print(f"Writing file {path}")
+    with open(path, "w") as f:
+        csvf = csv.writer(f)
+        csvf.writerow("balancing_type_project,horizon,period,average_power_fraction,min_power_fraction,max_power_fraction".split(","))
+        csvf.writerow(['year', 2030, 2030, 1, 0, 1])
+        
 
 def next_available_subscenario_id(subscenario:Subscenario):
     folder = subscenario.get_folder()
     p = re.compile(r'(?P<id>\d{1,2})_.*')
     files = [f for f in os.listdir(folder) if p.match(f)]
     return max([int(p.match(f).groupdict()['id']) for f in files])+1
+
 
 def get_opchars_file_desc(opchars, currentsteps):
     p = re.compile('{id}_(?P<desc>.*)_.+.csv'.format(id=opchars.id_))
@@ -723,12 +788,12 @@ def update_load_scenario_id(load_scid,
                           subtemporal,
                           weighted=True,
                           operation='mean')
-            return cd
-            #filename = lscid.get_files()[0]
-            #common.merge_in_csv(cd,
-            #                    filename,
-            #                    list(d.columns),
-            #                    on='timepoint')
+            
+            filename = lscid.get_files()[0]
+            common.merge_in_csv(cd,
+                                filename,
+                                list(d.columns),
+                                on='timepoint')
     
 
 def create_new_scenario(base_scenario,
@@ -737,7 +802,10 @@ def create_new_scenario(base_scenario,
                         steps,
                         granularity,
                         availability,
-                        endogenous):
+                        endogenous,
+                        hydroopchars_dir,
+                        db_path,
+                        gridpath_rep):
     """
     create a new scenario using a base scenario (assumed daily).
     In the new scenario temporal definations are 
@@ -753,7 +821,7 @@ def create_new_scenario(base_scenario,
     project_availability = create_availability_subscenario(csv_location,
                                                            availability,
                                                            endogenous,
-                                                           description="endo",
+                                                           description=f"{output_scenario}",
                                                            id_=pa_id)
     popchars_base = base.get_subscenario('project_operational_chars_scenario_id')
     popchars_id = next_available_subscenario_id(popchars_base)
@@ -761,7 +829,7 @@ def create_new_scenario(base_scenario,
     popchars = create_project_operational_chars_subscenario(popchars_base,
                                                             popchars_id,
                                                             steps,
-                                                            base,
+                                                            temporal_base,
                                                             temporal,
                                                             granularity,
                                                             desc,
@@ -782,7 +850,71 @@ def create_new_scenario(base_scenario,
     c['project_availability_scenario_id'] = project_availability.id_
     scenarios[output_scenario] = c
     scenarios.reset_index(inplace=True)
-    scenarios.to_csv(base.get_scenarios_csv(), index=False)
+    scenarios.to_csv(base.get_scenarios_csv(), float_format="%.0f", index=False)
+    update_to_database(temporal,
+                       project_availability,
+                       popchars,
+                       db_path,gridpath_rep)
+    common.update_scenario_via_gridpath(output_scenario,
+                                        csv_location,
+                                        db_path,
+                                        gridpath_rep)
+
+
+def update_to_database(temporal, project_availability, opchar_scid,
+                       db_path,
+                       gridpath_rep):
+    common.update_subscenario_via_gridpath("temporal_scenario_id",
+                                           temporal.id_,
+                                           None,
+                                           temporal.csv_location,
+                                           db_path,
+                                           gridpath_rep
+                                           )
+    common.update_subscenario_via_gridpath("project_availability_scenario_id",
+                                           project_availability.id_,
+                                           None,
+                                           project_availability.csv_location,
+                                           db_path,
+                                           gridpath_rep
+                                           )
+    
+    update_project_based_subscenarios_to_db(project_availability,
+                                            'endogenous_availability_scenario_id',
+                                            db_path,
+                                            gridpath_rep)
+
+    common.update_subscenario_via_gridpath("project_operational_chars_scenario_id",
+                                           opchar_scid.id_,
+                                           None,
+                                           opchar_scid.csv_location,
+                                           db_path,
+                                           gridpath_rep)
+
+    update_project_based_subscenarios_to_db(opchar_scid,
+                                            'hydro_operational_chars_scenario_id',
+                                            db_path,
+                                            gridpath_rep
+                                            )
+
+    
+
+    
+def update_project_based_subscenarios_to_db(subscenario,
+                                            sub_subscenario,
+                                            db_path,
+                                            gridpath_rep):
+    availdf = subscenario.data
+    endo  = availdf[sub_subscenario]
+    project = availdf.project[endo.notnull()]
+    endo = endo[endo.notnull()]
+    for p, e in zip(project, endo):
+        common.update_subscenario_via_gridpath(sub_subscenario,
+                                               int(e),
+                                               p,
+                                               subscenario.csv_location,
+                                               db_path,
+                                               gridpath_rep)
     
     
     
@@ -791,26 +923,35 @@ def create_new_scenario(base_scenario,
 @click.option("-b", "--base_scenario", default="rpo30", help="Base scenario from which other scenario will be generated.")
 @click.option("-o", "--output_scenario", default="rpo30_monthly", help="Name of scenario to generate")
 @click.option("-s", "--steps", default="month", help="steps as one of year, month, day")
-@click.option("-g", "--granularity", default="daily", help="granularity option as one of 15min, hourly, daily, monthly, yearly")
+@click.option("-t", "--granularity", default="daily", help="granularity option as one of 15min, hourly, daily, monthly, yearly")
 @click.option("-a", "--availability", default=None, help="path to availability data")
 @click.option("-e", "--endo", default=None, help="Path to file which contains endogenous availability data in single file")
-@click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
-@click.option("--dev/--no-dev", default=False, help="Run only for one project")
+@click.option("-h", "--hydro_dir", default=None, help="Path to directory which contains data for hydro_operational_chars_scenario_id")
+@click.option("-c", "--csv_location", default="csvs_mh", help="Path to folder where csvs are")
+@click.option("-d", "--database", default="../mh.db", help="Path to database")
+@click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
+@click.option("-u", "--update/--no-update", default=False, help="Update new data in csv files even if it exists.")
 def main(base_scenario,
          output_scenario,
          steps,
          granularity,
          availability,
          endo,
+         hydro_dir,
          csv_location,
-         dev):
+         database,
+         gridpath_rep,
+         update):
     create_new_scenario(base_scenario,
                         output_scenario,
                         csv_location,
                         steps,
                         granularity,
                         availability,
-                        endo
+                        endo,
+                        hydro_dir,
+                        database ,
+                        gridpath_rep
                         )
     
 if __name__ == "__main__":

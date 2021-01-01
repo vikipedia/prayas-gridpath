@@ -288,7 +288,7 @@ def sanity_check(csvpath):
     if df.shape[0] == len(df.timepoint.unique()):
         return True
     else:
-        print("Sanity check failed on {csvpath}, updating databse skipped")
+        print(f"Sanity check failed on {csvpath}, updating database skipped")
     
 
 def write_exogenous_via_gridpath_script(scenario1,
