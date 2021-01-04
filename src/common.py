@@ -73,12 +73,27 @@ def update_scenario_via_gridpath(scenario,
         f"--scenario {scenario}"
 
     cmd =  " ".join(["python", script, args])
+    print(cmd)
+    out_bytes = subprocess.check_output(cmd, shell=True)
+    print(out_bytes.decode())
+
+
+def run_scenario(scenario,
+                 csv_location,
+                 db_path):
+    cmd = "gridpath_run_e2e --scenario {scenario} --database {db_path}"
+    print(cmd)
     out_bytes = subprocess.check_output(cmd, shell=True)
     print(out_bytes.decode())
     
-    
-def create_command(subscenario, subscenario_id, project, csv_location,
-                   db_path, gridpath_rep, delete=True):
+
+def create_command(subscenario,
+                   subscenario_id,
+                   project,
+                   csv_location,
+                   db_path,
+                   gridpath_rep,
+                   delete=True):
     script = os.path.join(gridpath_rep, "db", "utilities", "port_csvs_to_db.py")
     args = f"--database {db_path} --csv_location {csv_location} " \
         f"--subscenario {subscenario} --subscenario_id {subscenario_id} --delete"

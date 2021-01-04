@@ -139,12 +139,10 @@ def get_projects(webdb, scenario):
     return [row['project'] for row in rows]
 
 
-
-
 def reduce_size(webdb, df, scenario):
     tmp1 = get_temporal_start_end_table(webdb, scenario)
 
-    horizon = [] 
+    horizon = []
     for row in df.to_dict(orient="records"):
         x = row['timepoint']
         horizon.append([p['horizon'] for p in tmp1 if x >= p['tmp_start'] and x <= p['tmp_end']][0])

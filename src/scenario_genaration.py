@@ -11,6 +11,7 @@ import shutil
 
 class InvalidSubscenario(Exception):pass
 
+
 class CSVLocation(object):
     """Documentation for CSVLocation
     class which acts as wrapper over folder, csv_location
@@ -805,7 +806,8 @@ def create_new_scenario(base_scenario,
                         endogenous,
                         hydroopchars_dir,
                         db_path,
-                        gridpath_rep):
+                        gridpath_rep,
+                        update=False):
     """
     create a new scenario using a base scenario (assumed daily).
     In the new scenario temporal definations are 
@@ -833,14 +835,14 @@ def create_new_scenario(base_scenario,
                                                             temporal,
                                                             granularity,
                                                             desc,
-                                                            False,
+                                                            update,
                                                             hydroopchars_dir
                                                             )
     update_load_scenario_id(base.load_scenario_id,
                             temporal_base,
                             temporal,
                             granularity,
-                            False)
+                            update)
 
     scenarios = pd.read_csv(base.get_scenarios_csv())
     scenarios.set_index('optional_feature_or_subscenarios', inplace=True)
@@ -898,8 +900,6 @@ def update_to_database(temporal, project_availability, opchar_scid,
                                             )
 
     
-
-    
 def update_project_based_subscenarios_to_db(subscenario,
                                             sub_subscenario,
                                             db_path,
@@ -915,8 +915,6 @@ def update_project_based_subscenarios_to_db(subscenario,
                                                subscenario.csv_location,
                                                db_path,
                                                gridpath_rep)
-    
-    
     
 
 @click.command()
@@ -951,7 +949,8 @@ def main(base_scenario,
                         endo,
                         hydro_dir,
                         database ,
-                        gridpath_rep
+                        gridpath_rep,
+                        update
                         )
     
 if __name__ == "__main__":

@@ -4,6 +4,11 @@ from collections import namedtuple
 import collections
 
 
+def generate_fo(length, average, maxoutage, minoutage):
+    pass
+    
+
+
 def combine_fo_m(m, moved_f):
     """    
     derate
