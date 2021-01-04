@@ -74,8 +74,15 @@ def update_scenario_via_gridpath(scenario,
 
     cmd =  " ".join(["python", script, args])
     print(cmd)
-    out_bytes = subprocess.check_output(cmd, shell=True)
-    print(out_bytes.decode())
+    p = subprocess.Popen(cmd, shell=True,
+                         stdout=subprocess.PIPE,
+                         stdin=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate("y".encode())
+    print(stdout.decode())
+    print(stderr.decode())
+    #out_bytes = subprocess.check_output(cmd, shell=True)
+    #print(out_bytes.decode())
 
 
 def run_scenario(scenario,
