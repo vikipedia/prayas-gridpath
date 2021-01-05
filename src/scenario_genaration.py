@@ -713,48 +713,74 @@ def create_project_operational_chars_subscenario(opchars_base:Subscenario,
                                                 update)
 
 
-    gen_hydro = df.operational_type=="gen_hydro"
-    hprojects = df.project[gen_hydro]
-    hopcscid = df.hydro_operational_chars_scenario_id[gen_hydro]
-
-    if balancing_type_project!="year":
-        print("Skipping hydro_operational_chars_scenario_id")
-    else:
-        if hydroopchars_dir:
-            for hopc_scid, project in zip(hopcscid, hprojects):
-                csvs = [f for f in os.listdir(hydroopchars_dir) if f.startswith(f"{project}-{hopc_scid}")]
-                if csvs:
-                    filename = os.path.join(hydroopchars_dir, csvs[0])
-                    dest = common.get_subscenario_csvpath(project,
-                                                          'hydro_operational_chars_scenario_id',
-                                                          int(hopc_scid),
-                                                          basetemporal.csv_location,
-                                                          description=desc)
-                    print(f"Copying data to {dest}")
-                    shutil.copy(filename, dest)
-
-        else:
-            for hopc_scid, project in zip(hopcscid, hprojects):
-                write_hydro_opchars_year_data(project,
-                                              int(hopc_scid),
-                                              basetemporal.csv_location,
-                                              desc)
+    update_hydro_op_chars(df,
+                          subtemporal,
+                          balancing_type_project,
+                          hydroopchars_dir,
+                          desc)
+    
     return opcharsscid
 
 
-def write_hydro_opchars_year_data(project,
-                                  hydro_operational_chars_scenario_id,
+def update_hydro_op_chars(opcharsdf,
+                          subtemporal,
+                          balancing_type_project,
+                          hydro_dir,
+                          desc):
+    df = opcharsdf
+    gen_hydro = df.operational_type=="gen_hydro"
+    hprojects = df.project[gen_hydro]
+    hopcscid = df.hydro_operational_chars_scenario_id[gen_hydro].astype(int)
+
+    cols=['balancing_type_project',
+          'horizon',
+          'period',
+          'average_power_fraction',
+          'min_power_fraction',
+          'max_power_fraction']
+
+    period = subtemporal.period_params.period.iloc[0]
+    for hopc_scid, project in zip(hopcscid, hprojects):
+        if hydro_dir:
+            print(hopc_scid, project)
+            csvs = [f for f in os.listdir(hydro_dir) if f.startswith(f"{project}-{hopc_scid}")]
+            if csvs:
+                filename = os.path.join(hydro_dir, csvs[0])
+                df = pd.read_csv(filename)
+                hydro_data = df[df.balancing_type_project==balancing_type_project]
+            else:
+                raise Exception(f"{hydro_dir} has no csv files!")
+
+        elif balancing_type_project=='year':
+            hydro_data = pd.DataFrame([dict(zip(cols,['year',period,period, 1.0, 0.0, 1.0]))])
+        else:
+            raise Exception("hydro_dir option can not be empty.")
+
+        write_hydro_opchars_year_data(hydro_data,
+                                      project,
+                                      int(hopc_scid),
+                                      cols,
+                                      subtemporal.csv_location,
+                                      desc)
+
+
+def write_hydro_opchars_year_data(hydro_data,
+                                  project,
+                                  hopc_scid,
+                                  cols,
                                   csv_location,
                                   description):
-    path = common.get_subscenario_csvpath(project, 'hydro_operational_chars_scenario_id',
-                                          hydro_operational_chars_scenario_id,
-                                          csv_location, description)
-    print(f"Writing file {path}")
-    with open(path, "w") as f:
-        csvf = csv.writer(f)
-        csvf.writerow("balancing_type_project,horizon,period,average_power_fraction,min_power_fraction,max_power_fraction".split(","))
-        csvf.writerow(['year', 2030, 2030, 1, 0, 1])
-        
+    dest = common.get_subscenario_csvpath(project,
+                                          'hydro_operational_chars_scenario_id',
+                                          hopc_scid,
+                                          csv_location,
+                                          description=description)
+    print(f"Merging data to {dest}")
+    common.merge_in_csv(hydro_data,
+                        dest,
+                        cols = cols,
+                        on='horizon')
+    
 
 def next_available_subscenario_id(subscenario:Subscenario):
     folder = subscenario.get_folder()
