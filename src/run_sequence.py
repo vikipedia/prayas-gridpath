@@ -11,6 +11,7 @@ import hydro_opchars
 @click.option("-e", "--endo", default=None, help="Path to file which contains endogenous availability data for pass1 in single file")
 @click.option("-H", "--hydro_dir1", default=None, help="Path to directory which contains data for hydro_operational_chars_scenario_id for pass1")
 @click.option("-h", "--hydro_dir2", default=None, help="Path to directory which contains data for hydro_operational_chars_scenario_id for pass2")
+@click.option("-f", "--forced_outage", default=None, help="Path of excel file that has forced outage")
 @click.option("-c", "--csv_location", default="csvs_mh", help="Path to folder where csvs are")
 @click.option("-d", "--database", default="../mh.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
@@ -22,6 +23,7 @@ def main(base_scenario,
          endo,
          hydro_dir1,
          hydro_dir2,
+         forced_outage,
          csv_location,
          database,
          gridpath_rep,
@@ -57,7 +59,7 @@ def main(base_scenario,
     endogenous_exogenous.endogenous_to_exogenous(pass1,
                                                  pass2,
                                                  base_scenario,
-                                                 None,
+                                                 forced_outage,
                                                  csv_location,
                                                  database,
                                                  gridpath_rep,
