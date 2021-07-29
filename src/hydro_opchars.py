@@ -19,8 +19,8 @@ def hydro_op_chars_inputs_(webdb, project,
 
 
 def hydro_op_chars_inputs(webdb, scenario, project):
-    hydro_op_chars_scenario_id = get_hydro_ops_chars_sceanario_id(webdb,
-                                                                  scenario, project)
+    hydro_op_chars_scenario_id = get_hydro_ops_chars_scenario_id(webdb,
+                                                                 scenario, project)
     balancing_type_project = get_balancing_type(webdb, scenario)
     return hydro_op_chars_inputs_(webdb, project,
                                   hydro_op_chars_scenario_id,
@@ -84,7 +84,7 @@ def get_power_mw_dataset(webdb, scenario, project):
 def adjust_mean_const(b, min_, max_):
     """
     adjusts values in b such that original average of b remains as it is
-    but every value of b lied between corresponding min_ and max_
+    but every value of b lies between corresponding min_ and max_
     """
     def adjust(c):
         c1 = c.copy()
@@ -102,7 +102,6 @@ def adjust_mean_const(b, min_, max_):
             #print("-"*5)
             c1[between] -= (min_[less] - c1[less]).sum()/between.sum()
             c1[less] = min_[less]
-        
 
         #print(c.mean(), c1.mean())
         return c1
@@ -172,7 +171,7 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project):
     return results
 
 
-def get_hydro_ops_chars_sceanario_id(webdb, scenario, project):
+def get_hydro_ops_chars_scenario_id(webdb, scenario, project):
     pocs_id = common.get_field(webdb,
                                "scenarios",
                                "project_operational_chars_scenario_id",
@@ -201,14 +200,14 @@ def write_results_csv(results,
     return subscenario, subscenario_id
 
 
-def hydro_op_chars(scenario1,
-                   scenario2,
+def hydro_op_chars(database,
                    csv_location,
-                   database,
-                   gridpath_rep,
+                   gridpath_repo,
+                   scenario1,
+                   scenario2,
+                   description,
                    project,
-                   update_database,
-                   description):
+                   update_database):
     webdb = common.get_database(database)
     projects = get_projects(webdb, scenario1)
     if project:
@@ -217,7 +216,7 @@ def hydro_op_chars(scenario1,
     subscenario = "hydro_operational_chars_scenario_id"
     for project_ in projects:
         print(f"Computing data for {project_}")
-        subscenario_id = get_hydro_ops_chars_sceanario_id(webdb, scenario2, project_)
+        subscenario_id = get_hydro_ops_chars_scenario_id(webdb, scenario2, project_)
 
         results = adjusted_mean_results(webdb, scenario1, scenario2, project_)
         write_results_csv(results,
@@ -232,35 +231,35 @@ def hydro_op_chars(scenario1,
                                                    project_,
                                                    csv_location,
                                                    database,
-                                                   gridpath_rep)
+                                                   gridpath_repo)
         
         
 @click.command()
+@click.option("-d", "--database", default="../toy.db", help="Path to database")
+@click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
+@click.option("-g", "--gridpath_repo", default="../", help="Path of gridpath source repository")
 @click.option("-s1", "--scenario1", default="toy1_pass1", help="Name of scenario1")
 @click.option("-s2", "--scenario2", default="toy1_pass2", help="Name of scenario2")
-@click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
-@click.option("-d", "--database", default="../toy.db", help="Path to database")
-@click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
+@click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
 @click.option("--project", default=None, help="Run for only one project")
 @click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
-@click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
-def main(scenario1,
-         scenario2,
+def main(database,
          csv_location,
-         database,
-         gridpath_rep,
+         gridpath_repo,
+         scenario1,
+         scenario2,
+         description,
          project,
-         update_database,
-         description
+         update_database
          ):
 
-    hydro_op_chars(scenario1,
-                   scenario2,
+    hydro_op_chars(database,
                    csv_location,
-                   database,
-                   gridpath_rep,
-                   project,
+                   gridpath_repo,
+                   scenario1,
+                   scenario2,
                    update_database,
+                   project,
                    description)
 
 def dbtest():    
@@ -288,9 +287,9 @@ def test_1():
 def test_compare_with_db():
 
     def get_db_results():
-        subscenario_id = get_hydro_ops_chars_sceanario_id(webdb,
-                                                          compare_scenario,
-                                                          project)
+        subscenario_id = get_hydro_ops_chars_scenario_id(webdb,
+                                                         compare_scenario,
+                                                         project)
         rows = webdb.where("inputs_project_hydro_operational_chars",
                            project=project,
                            hydro_operational_chars_scenario_id=subscenario_id).list()
@@ -309,7 +308,7 @@ def test_compare_with_db():
     webdb = common.get_database(database)
     subscenario = "hydro_operational_chars_scenario_id"
     print(f"Computing data for {project}")
-    subscenario_id = get_hydro_ops_chars_sceanario_id(webdb, scenario2, project)
+    subscenario_id = get_hydro_ops_chars_scenario_id(webdb, scenario2, project)
     results = adjusted_mean_results(webdb, scenario1, scenario2, project)
     write_results_csv(results,
                       project,

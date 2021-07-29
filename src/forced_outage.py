@@ -6,25 +6,22 @@ import collections
 
 def generate_fo(length, average, maxoutage, minoutage):
     pass
-    
 
 
-def combine_fo_m(m, moved_f):
+def combine_fo_m(m, f):
     """    
     derate
     1 -> available
     0 -> not available
 
-    rules for combing after moving fo
+    rules for combining after moving fo
     r -> min(m,fo)
-
     """
-    df = pd.DataFrame({"m": m,
-                       "newf": moved_f})
+    df = pd.DataFrame({"m": m, "newf": moved_f})
     return df.apply(min, axis=1)
 
 
-def moved_fo(m, f):
+def move_fo(m, f):
     """
     m      f
     <1     <1    move fo where m is 1
@@ -195,54 +192,54 @@ def prints(s):
 def test_moved_fo():
     m = str_to_series("111100011111111")
     f = str_to_series("111100011111111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
     
     m = str_to_series("111100011111111")
     f = str_to_series("111110001111111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
     
     m = str_to_series("111100011111111")
     f = str_to_series("110001111111111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
     
     m = str_to_series("111100011111111")
     f = str_to_series("110001111111111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
     
     m = str_to_series("111100011111111000")
     f = str_to_series("110001111111100011")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
 
     m = str_to_series("111100011111111111")
     f = str_to_series("111110000001100000")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
     
     m = str_to_series("111100011111111")
     f = str_to_series("111110000001111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
     m = str_to_series("111100011000000")
     f = str_to_series("111110000001111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
     m = str_to_series("110001111000000")
     f = str_to_series("111000000111111")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
     m = str_to_series("1111110000111111")
     f = str_to_series("1100111111111000")
-    nf = moved_fo(m, f)
+    nf = move_fo(m, f)
     check_asserts(m, f, nf)
 
 
