@@ -17,6 +17,7 @@ def combine_fo_m(m, f):
     rules for combining after moving fo
     r -> min(m,fo)
     """
+    moved_f = move_fo(m, f)
     df = pd.DataFrame({"m": m, "newf": moved_f})
     return df.apply(min, axis=1)
 
