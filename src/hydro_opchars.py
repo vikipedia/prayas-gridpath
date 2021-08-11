@@ -258,9 +258,9 @@ def main(database,
                    gridpath_repo,
                    scenario1,
                    scenario2,
-                   update_database,
+                   description,
                    project,
-                   description)
+                   update_database)
 
 def dbtest():    
     webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath/mh.db")
