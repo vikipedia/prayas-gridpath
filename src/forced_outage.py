@@ -6,9 +6,8 @@ import collections
 
 def generate_fo(length, average, maxoutage, minoutage):
     pass
+
     
-
-
 def combine_fo_m(m, moved_f):
     """    
     derate
@@ -73,18 +72,26 @@ def target_intervals(maint, forced):
     Find intervals in forced such that
     maint.value < 1 and forced.value < 1
     """
-    return set(f for interval in maint for f in forced if interval.value<1 and f.value<1 and overlap(interval, f))
+    return set(f for interval in maint for f in forced if interval.value < 1 and f.value<1 and overlap(interval, f))
 
 
 def distance(first, second):
-    return second.start - first.start   
+    """
+    part of refactored function
+    """
+    return second.start - first.start
+
 
 def left(target, ms):
-    return [m for m in ms if distance(target, m)<=0 and target!=m]
+    """
+    find left hand side positions
+    """
+    return [m for m in ms if distance(target, m) <= 0 and target != m]
+
 
 def is_on_left(target, location):
-    return distance(target, location)<=0 and target!=location
-    #FIXME:see border case f right!
+    return distance(target, location) <= 0 and target != location
+    # FIXME:see border case f right!
 
 
 def right(target, ms):
@@ -244,7 +251,6 @@ def test_moved_fo():
     f = str_to_series("1100111111111000")
     nf = moved_fo(m, f)
     check_asserts(m, f, nf)
-
 
     
 #test_moved_fo()
