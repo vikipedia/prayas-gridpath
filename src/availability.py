@@ -377,14 +377,46 @@ def endogenous_to_exogenous(scenario1:str,
                                                 update_database=update_database)
 
     if scenario3:
+        projs = find_projects_to_copy(scenario1, scenario2, database)
         if fo:
             print("Reading forced outage excel workbook")
+            fo_all = pd.read_excel(fo,
+                               sheet_name="gridpath-input",
+                               nrows=35041,
+                               engine='openpyxl')
+
             fo = pd.read_excel(fo,
                                sheet_name="gridpath-input",
                                nrows=35041,
                                usecols=projs,
                                engine='openpyxl')
         
+            df_ava, df_monthly = get_exogenous_results(scenario1,
+                                            scenario2,
+                                            scenario3,
+                                            fo,
+                                            projs[0],
+                                            database)
+
+            conn = common.get_database(database)
+            table = common.get_table_dataframe(conn, "inputs_project_availability")
+            table.dropna(subset = ['exogenous_availability_scenario_id'], inplace = True)
+
+            exo_prj = [x for x in table.project if x not in projs]
+
+            for prj in exo_prj:
+                df_ava['availability_derate'] = fo_all[prj]
+                subscenario, subscenario_id = write_exogenous_results_csv(df_ava,
+                                                              prj,
+                                                              csv_location,
+                                                              name)
+                if update_database:
+                    common.update_subscenario_via_gridpath(subscenario,
+                                                           subscenario_id,
+                                                           prj, csv_location,
+                                                           database,
+                                                           gridpath_repo)
+
         for project_ in projs:
             print(f"Starting {project_} for {scenario3} ...")
             write_exogenous_via_gridpath_script(scenario1,
