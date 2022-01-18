@@ -297,7 +297,7 @@ def write_exogenous_via_gridpath_script(scenario1,
                                         fo,
                                         project,
                                         csv_location,
-                                        gridpath_rep,
+                                        gridpath_repo,
                                         db_path,
                                         description,
                                         update_database):
@@ -323,7 +323,7 @@ def write_exogenous_via_gridpath_script(scenario1,
     if update_database and sanity_check(csvpath):
         common.update_subscenario_via_gridpath(subscenario, subscenario_id,
                                                project, csv_location, db_path,
-                                               gridpath_rep)
+                                               gridpath_repo)
 
     
 def find_projects(scenario1, type_, webdb):
@@ -352,10 +352,10 @@ def endogenous_to_exogenous(scenario1:str,
                             fo:str,
                             csv_location:str,
                             database:str,
-                            gridpath_rep:str,
+                            gridpath_repo:str,
                             skip_scenario2:bool,
                             project:str,
-                            description:str,
+                            name:str,
                             update_database:bool):
 
     projs = find_projects_to_copy(scenario1, scenario2, database)
@@ -371,19 +371,52 @@ def endogenous_to_exogenous(scenario1:str,
                                                 fo=None,
                                                 project=project_,
                                                 csv_location=csv_location,
-                                                gridpath_rep= gridpath_rep,
+                                                gridpath_repo= gridpath_repo,
                                                 db_path=database,
-                                                description=description,
+                                                description=name,
                                                 update_database=update_database)
 
     if scenario3:
+        projs = find_projects_to_copy(scenario1, scenario2, database)
         if fo:
             print("Reading forced outage excel workbook")
+            fo_all = pd.read_excel(fo,
+                               sheet_name="gridpath-input",
+                               nrows=35041,
+                               engine='openpyxl')
+
             fo = pd.read_excel(fo,
                                sheet_name="gridpath-input",
                                nrows=35041,
-                               usecols=projs)
+                               usecols=projs,
+                               engine='openpyxl')
         
+            df_ava, df_monthly = get_exogenous_results(scenario1,
+                                            scenario2,
+                                            scenario3,
+                                            fo,
+                                            projs[0],
+                                            database)
+
+            conn = common.get_database(database)
+            table = common.get_table_dataframe(conn, "inputs_project_availability")
+            table.dropna(subset = ['exogenous_availability_scenario_id'], inplace = True)
+
+            exo_prj = [x for x in table.project if x not in projs]
+
+            for prj in exo_prj:
+                df_ava['availability_derate'] = fo_all[prj]
+                subscenario, subscenario_id = write_exogenous_results_csv(df_ava,
+                                                              prj,
+                                                              csv_location,
+                                                              name)
+                if update_database:
+                    common.update_subscenario_via_gridpath(subscenario,
+                                                           subscenario_id,
+                                                           prj, csv_location,
+                                                           database,
+                                                           gridpath_repo)
+
         for project_ in projs:
             print(f"Starting {project_} for {scenario3} ...")
             write_exogenous_via_gridpath_script(scenario1,
@@ -392,57 +425,65 @@ def endogenous_to_exogenous(scenario1:str,
                                                 fo,
                                                 project_,
                                                 csv_location,
-                                                gridpath_rep,
+                                                gridpath_repo,
                                                 db_path=database,
-                                                description=description,
+                                                description=name,
                                                 update_database=update_database)
 
 
 @click.command()
-@click.option("-s1", "--scenario1", default="toy1_pass1", help="Name of scenario1")
-@click.option("-s2", "--scenario2", default="toy1_pass2", help="Name of scenario2")
-@click.option("-s3", "--scenario3", default=None, help="Name of scenario3")
-@click.option("-f", "--fo", default=None, help="Excel filepath, containing forced outage information")
-@click.option("-c", "--csv_location", default="csvs_toy", help="Path to folder where csvs are")
-@click.option("-d", "--database", default="../toy.db", help="Path to database")
-@click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
-@click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2")
-@click.option("--project", default=None, help="Run only for one project")
-@click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
-@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
+@click.option("-d", "--database", default="dispatch.db", help="Path to database (default: dispatch.db")
+@click.option("-c", "--csv_location", default="csvs", help="Path to folder where csvs are (default: csvs)")
+@click.option("-g", "--gridpath_repo", default="..", help="Path of gridpath source repository (default: ..)")
+@click.option("-s1", "--scenario1", default="pass1", help="Name of scenario1 (default: pass1)")
+@click.option("-s2", "--scenario2", default="pass2", help="Name of scenario2 (default: pass2)")
+@click.option("-s3", "--scenario3", default=None, help="Name of scenario3 (default: None)")
+@click.option("-f", "--fo", default=None, help="Excel filepath, containing forced outage information (default: None)")
+@click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2 (default: no-skip)")
+@click.option("--project", default=None, help="Run only for one project (default: None")
+@click.option("-n", "--name", default="all", help="Description in name of csv files (default: all)")
+@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True (default: no-update)")
 def main(scenario1:str,
          scenario2:str,
          scenario3:str,
          fo:str,
          csv_location:str,
          database:str,
-         gridpath_rep:str,
+         gridpath_repo:str,
          skip_scenario2:bool,
          project:str,
-         description:str,
+         name:str,
          update_database:bool):
 
     """
-    Usage: python endogenous_exogenous.py [OPTIONS]
+    Usage: python availability.py [OPTIONS]
     this is a script to copy endogenous output from scenario1
     to exogenous input of scenario2. to run this script, gridpath
     virtual environment must be active.
 
     Options:
 
-      --scenario1 TEXT     default -> toy1_pass1
+      --database TEXT       default -> ../toy.db
 
-      --scenario2 TEXT     default -> toy1_pass2
+      --csv_location TEXT   default -> csvs_toy
 
-      --scenario3 TEXT     default -> None
+      --gridpath_repo TEXT  default-> ../
 
-      --fo TEXT  default -> None     
+      --scenario1 TEXT      default -> toy1_pass1
 
-      --csv_location TEXT      default -> csvs_toy
+      --scenario2 TEXT      default -> toy1_pass2
 
-      --database TEXT      default -> ../toy.db
+      --scenario3 TEXT      default -> None
 
-      --gridpath_rep TEXT  default-> ../
+      --fo TEXT             default -> None     
+
+      --skip_scenario2      default -> no-skip_scenario2
+
+      --project TEXT        default -> None
+
+      --name TEXT           default -> all
+
+      --update_database     default -> no-update_database
 
     """
     return endogenous_to_exogenous(
@@ -452,10 +493,10 @@ def main(scenario1:str,
         fo,
         csv_location,
         database,
-        gridpath_rep,
+        gridpath_repo,
         skip_scenario2,
         project,
-        description,
+        name,
         update_database
     )
     
