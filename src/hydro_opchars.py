@@ -61,13 +61,6 @@ def get_balancing_type(webdb, scenario):
                             temporal_scenario_id=temporal_scenario_id)
 
 
-def get_temporal_start_end_table(conn, scenario):
-    temporal_id = get_temporal_scenario_id(conn, scenario)
-    temporal = conn.where("inputs_temporal_horizon_timepoints_start_end",
-                          temporal_scenario_id=temporal_id).list()
-    return temporal
-
-
 def get_power_mw_dataset(webdb, scenario, project):
     scenario_id = common.get_field(webdb,
                                    'scenarios',
@@ -154,12 +147,22 @@ def reduce_size(webdb, df, scenario, mapfile):
         c for c in timepoint_map.columns if c.startswith(f"{pass_name}_horizon_")][0]
 
     cols = [c for c in df.columns]
-    dfnew = df.set_index("timepoint").join(t_map[[pass2_horizon]])
-    del dfnew['horizon']
-    dfnew = dfnew.rename(columns={pass2_horizon: "horizon"})
+    rsuffix = "_other"
+    dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
+    weight = dfnew[f"number_of_hours_in_timepoint{rsuffix}"]
+    dfnew['power_mw_x'] = dfnew['power_mw'] * weight
+    dfnew = dfnew.reset_index()
 
-    grouped = dfnew.reset_index().groupby("horizon").mean()
-    return grouped.reset_index(drop=True)
+    grouped = dfnew.groupby(pass2_horizon).sum()
+
+    grouped['power_mw'] = grouped['power_mw_x'] / \
+        grouped[f"number_of_hours_in_timepoint{rsuffix}"]
+
+    del grouped["number_of_hours_in_timepoint"]
+
+    r = grouped.rename(
+        columns={f"number_of_hours_in_timepoint{rsuffix}": "number_of_hours_in_timepoint"})
+    return r.reset_index(drop=True)
 
 
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
@@ -169,16 +172,20 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
     cuf = power_mw_df['power_mw']/capacity
+    weight = power_mw_df['number_of_hours_in_timepoint']
     min_, max_ = [df[c] for c in cols[-2:]]
 
     if len(cuf) > len(min_):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
         cuf = power_mw_df['power_mw']/capacity
+        weight = power_mw_df['number_of_hours_in_timepoint']
 
-    avg = adjust_mean_const(cuf, min_, max_)
+    avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)
     results = df[cols].copy()
+
     del results['average_power_fraction']
-    results['average_power_fraction'] = avg
+    results['average_power_fraction'] = avg/weight
+
     return results
 
 
