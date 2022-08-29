@@ -88,19 +88,19 @@ def update_scenario_via_gridpath(scenario,
 def run_scenario(scenario,
                  csv_location,
                  db_path):                 
-    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass3_auto_pass1 --database ..\..\..\db\toy2.db"
+                                                                                                  
     scen_loca = '../../../scenarios/toy_run_seq1'
     cmd = "gridpath_run_e2e --scenario %s --database %s --log --scenario_location %s"%(scenario, db_path, scen_loca)
-    #cmd = "gridpath_run_e2e --scenario %s --database %s "%(scenario, db_path)
-    
-    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass1 --database ../../../db/VP.db --solver cplex"
+                                                                                                                                                                               
     print(cmd)
 
     out_bytes = subprocess.run(cmd, shell=True) #- "check_output" needs zero output
-    #rc, out_bytes = subprocess.getstatusoutput(cmd)
-    #print(rc,'rc')
-    print('*#*#*', out_bytes,'out_bytes', '*#*#*#*')
-    #print(out_bytes.decode()) #- decode() gives error and not getting used in the script so can be skipped
+    conn = get_database(db_path)
+    table = get_table_dataframe(conn, "scenarios")
+    run_id = table[table.scenario_name == scenario]['run_status_id'].squeeze()
+    if run_id != 2:
+        return False
+    return True
     
 
 def create_command(subscenario,

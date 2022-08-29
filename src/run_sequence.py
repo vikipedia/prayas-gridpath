@@ -47,7 +47,10 @@ def main(base_scenario,
                                             )
     
     
-    common.run_scenario(pass1, csv_location, database)
+    if not common.run_scenario(pass1, csv_location, database):
+        print('Run failed for scenario %s, exiting gracefully'%pass1)
+        return
+        
     pass2 = base_scenario + "_auto_pass2"
     scenario_generation.create_new_scenario(base_scenario,
                                             pass2,
@@ -85,7 +88,9 @@ def main(base_scenario,
                                  description=base_scenario+"auto")
 
     
-    common.run_scenario(pass2, csv_location, database)
+    if not common.run_scenario(pass2, csv_location, database):
+        print('Run failed for scenario %s, exiting gracefully'%pass2)    
+        return
     
     hydro_opchars.hydro_op_chars(pass2,
                                  base_scenario,
@@ -96,7 +101,9 @@ def main(base_scenario,
                                  True,
                                  description=base_scenario+"auto")
 
-    common.run_scenario(base_scenario, csv_location, database)
+    if not common.run_scenario(base_scenario, csv_location, database):
+        print('Run failed for scenario %s, exiting gracefully'%base_scenario)
+        return
 
 
                
