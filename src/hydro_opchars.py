@@ -5,6 +5,9 @@ import common
 import os
 import click
 
+# decimal precision for hydro_opchar capacity factors
+def PRECISION():
+    return 9
 
 def hydro_op_chars_inputs_(webdb, project,
                            hydro_op_chars_sid,
@@ -136,7 +139,7 @@ def reduce_size(webdb, df, scenario, mapfile):
     """
     timepoint_map = pd.read_excel(mapfile,
                                   sheet_name="map",
-                                  skiprows=3,
+                                  skiprows=2,
                                   engine="openpyxl")
     pass1 = [c for c in timepoint_map.columns if c.startswith(
         "pass1_timepoint_")][0]
@@ -149,42 +152,42 @@ def reduce_size(webdb, df, scenario, mapfile):
     cols = [c for c in df.columns]
     rsuffix = "_other"
     dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
-    weight = dfnew[f"number_of_hours_in_timepoint{rsuffix}"]
+    
+    weight = dfnew["number_of_hours_in_timepoint"]
     dfnew['power_mw_x'] = dfnew['power_mw'] * weight
     dfnew = dfnew.reset_index()
-
     grouped = dfnew.groupby(pass2_horizon).sum()
-
     grouped['power_mw'] = grouped['power_mw_x'] / \
-        grouped[f"number_of_hours_in_timepoint{rsuffix}"]
+        grouped["number_of_hours_in_timepoint"]
 
-    del grouped["number_of_hours_in_timepoint"]
-
-    r = grouped.rename(
-        columns={f"number_of_hours_in_timepoint{rsuffix}": "number_of_hours_in_timepoint"})
-    return r.reset_index(drop=True)
+    #print(grouped)                 
+    return grouped.reset_index(drop=True)
 
 
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     cols = ["balancing_type_project", "horizon", "period",
             "average_power_fraction", "min_power_fraction", "max_power_fraction"]
-    df = hydro_op_chars_inputs(webdb, scenario2, project)
+    df0 = hydro_op_chars_inputs(webdb, scenario2, project)
     power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
     cuf = power_mw_df['power_mw']/capacity
     weight = power_mw_df['number_of_hours_in_timepoint']
+    prd = power_mw_df['period'].unique()[0]
+    df = df0[df0.period == prd].reset_index(drop = True)
+    df.min_power_fraction = df.min_power_fraction.round(decimals = PRECISION())
+    df.max_power_fraction = df.max_power_fraction.round(decimals = PRECISION())
     min_, max_ = [df[c] for c in cols[-2:]]
 
     if len(cuf) > len(min_):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
         cuf = power_mw_df['power_mw']/capacity
         weight = power_mw_df['number_of_hours_in_timepoint']
-
+        
     avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)
     results = df[cols].copy()
 
     del results['average_power_fraction']
-    results['average_power_fraction'] = avg/weight
+    results['average_power_fraction'] = (avg/weight).round(decimals = PRECISION())
 
     return results
 
@@ -293,7 +296,7 @@ def dbtest():
     scenario1 = "rpo30_pass1"
     scenario2 = 'rpo30_pass2'
     project = 'Koyna_Stage_3'
-    timepoint_map = "/home/vikrant/Downloads/timepoint_map.xlsx"
+    timepoint_map = "timepoint_map.xlsx"
     adjusted_mean_results(webdb, scenario1, scenario2, project, timepoint_map)
 
 

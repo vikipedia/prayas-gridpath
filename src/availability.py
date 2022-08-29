@@ -46,6 +46,12 @@ def get_temporal_scenario_id(conn, scenario):
                             "temporal_scenario_id",
                             scenario_name=scenario)
 
+def num_hrs_in_tp(conn, scenario):
+    tmp_id = get_temporal_scenario_id(conn, scenario)
+    return conn.where("inputs_temporal",
+                       "number_of_hours_in_timepoint",
+                       temporal_scenario_id=tmp_id)
+
 
 @functools.lru_cache(maxsize=None)
 def get_scenario_id(conn, scenario_name):
@@ -124,7 +130,7 @@ def get_exogenous_results_(conn,
 
     timepoint_map = pd.read_excel(mapfile,
                                   sheet_name="map",
-                                  skiprows=3,
+                                  skiprows=2,
                                   engine='openpyxl')
 
     source_timepoints = [
@@ -142,6 +148,11 @@ def get_exogenous_results_(conn,
               project, colnames, exo_id_value)
 
     timepoints = np.array(pass1_results['timepoint'].unique())
+    if 'number_of_hours_in_timepoint' not in timepoint_map.columns:
+        df_tmp = common.get_table_dataframe(conn, 'inputs_temporal')
+        df_tmp_sc1 = df_tmp[df_tmp.temporal_scenario_id == get_temporal_scenario_id(conn, scenario1)].reset_index(drop=True)
+        col_tp = [ c for c in timepoint_map.columns if c.startswith("pass1_timepoint_")][0]
+        timepoint_map = timepoint_map.set_index(col_tp, drop = False).join(df_tmp_sc1[['timepoint', 'number_of_hours_in_timepoint']].set_index('timepoint'))
     if len(timepoints) > len(timepoint_map[target_timepoints].unique()):
         t_map_g = timepoint_map.groupby(source_timepoints)
         t_map = t_map_g.first()
@@ -149,7 +160,6 @@ def get_exogenous_results_(conn,
     else:
         t_map = timepoint_map.set_index(source_timepoints)
         weight = t_map['number_of_hours_in_timepoint']
-
     r = t_map.join(pass1_results.set_index(
         'timepoint'), lsuffix="", rsuffix="_other")
     r['availability_derate'] = r['availability_derate'] * weight
@@ -323,16 +333,23 @@ def endogenous_to_exogenous(scenario1: str,
 
         if fo:
             print("Reading forced outage excel workbook")
-            fo_all = pd.read_excel(fo,
-                                   sheet_name="gridpath-input",
-                                   nrows=35041,
-                                   engine='openpyxl')
+            # fo_all = pd.read_excel(fo,
+                                   # sheet_name="gridpath-input",
+                                   # nrows=35041,
+                                   # engine='openpyxl')
 
-            fo = pd.read_excel(fo,
-                               sheet_name="gridpath-input",
+            # fo = pd.read_excel(fo,
+                               # sheet_name="gridpath-input",
+                               # nrows=35041,
+                               # usecols=projs,
+                               # engine='openpyxl')            
+                               
+            fo_all = pd.read_csv(fo,                                   
+                                   nrows=35041)
+
+            fo = pd.read_csv(fo,                               
                                nrows=35041,
-                               usecols=projs,
-                               engine='openpyxl')
+                               usecols=projs)
 
             df_ava, df_monthly = get_exogenous_results(scenario1,
                                                        scenario2,
@@ -345,11 +362,15 @@ def endogenous_to_exogenous(scenario1: str,
             conn = common.get_database(database)
             table = common.get_table_dataframe(
                 conn, "inputs_project_availability")
-            table.dropna(
-                subset=['exogenous_availability_scenario_id'], inplace=True)
-
-            exo_prj = [x for x in table.project if x not in projs]
-
+                
+            table.dropna(subset=['exogenous_availability_scenario_id'], inplace=True)            
+            table_scenario = common.get_table_dataframe(conn, "scenarios")                
+            table_pf = common.get_table_dataframe(conn, "inputs_project_portfolios")
+            pf_id = table_scenario[table_scenario.scenario_name == scenario3]['project_portfolio_scenario_id'].squeeze()
+            table_pf = table_pf[table_pf.project_portfolio_scenario_id == pf_id].reset_index(drop = True)
+            
+            exo_prj = list(set([x for x in table.project if ((x not in projs) and (x in list(table_pf.project)))]))
+                        
             for prj in exo_prj:
                 df_ava['availability_derate'] = fo_all[prj]
                 subscenario, subscenario_id = write_exogenous_results_csv(df_ava,

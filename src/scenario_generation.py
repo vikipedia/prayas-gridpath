@@ -258,11 +258,14 @@ def test_create_temporal_subscenario():
 def create_temporal_subscenario(base:Subscenario,
                                 balancing_type_horizon:str,
                                 granularity:str,
-                                id_:int):
-    structure,horizon_params,horizon_timepoints, period_params = create_temporal_subscenario_data(base, balancing_type_horizon, granularity, id_)
+                                id_:int, 
+                                map_file):
+                                
+    structure,horizon_params,horizon_timepoints, period_params = create_temporal_subscenario_data(base, balancing_type_horizon, granularity, id_, map_file)
     steps = len(structure['subproblem_id'].unique())
     granularity = len(structure[structure.spinup_or_lookahead==0])
     d = GRAN
+
     gran = d[granularity]
     subfolder = f"{id_}_{steps}steps_{gran}_timepoints"
     tscid = Subscenario(name='temporal_scenario_id',
@@ -316,7 +319,7 @@ def create_availability_subscenario(csv_location:str,
             print(endoscid_,"**"*10)
             df = agg_data[(agg_data.subscenario_id == endoscid_) & (agg_data.project==project)]
             cols = list(df.columns)
-            cols_ = ['project', 'subscenario_id', 'subscenario_name']
+            cols_ = ['project', 'subscenario_id']#, 'subscenario_name']
             for c in cols_:
                 cols.remove(c)
             projectdata = df[cols]
@@ -499,8 +502,9 @@ def collapse(data,
 
 def create_structure(base:Subscenario,
                      balancing_type_horizon:str,
-                     granularity:str):
-
+                     granularity:str,
+                     map_file):
+                     
     ns = [key for key, value in GRAN.items() if value == granularity]
     if not ns:
         raise ValueError("Invalid granularity specified. valid granularity values are {}".format(GRAN.values()))
@@ -526,7 +530,14 @@ def create_structure(base:Subscenario,
                         index = index,
                         name = "horizon_" + balancing_type_horizon)
     s_ = firstcols.join(sumcols).join(subproblem_id).join(horizon)
+    # timepoint_map = pd.read_excel(map_file,
+                                   # sheet_name="map",
+                                   # skiprows=2,
+                                   # engine='openpyxl')
     
+    # timepoint_cols = [c for c in timepoint_map.columns if granularity in c]
+    # timepoint = list(timepoint_map[timepoint_cols[0]].drop_duplicates())
+    # s_['timepoint'] = timepoint  
     s_  = create_timepoint_col(s_, horizon)
     s_['linked_timepoint'].iloc[:] = np.nan
     colnames = ['subproblem_id','stage_id','timepoint','period','number_of_hours_in_timepoint','timepoint_weight','previous_stage_timepoint_map','spinup_or_lookahead','linked_timepoint','month','hour_of_day','timestamp',horizon.name]
@@ -548,10 +559,10 @@ def create_timepoint_col(s_, horizon):
         return grpbyhorizon['timestamp_'].first()[h]
         
     lens = [len(s_[s_[horizon.name]==h]) for h in sorted(s_[horizon.name].unique(),
-                                                         key=get_time)]
+                                                        key=get_time)]
     data = sum([list(range(1, n+1)) for n in lens], start=[])
     timepoint = pd.Series(data = data, name='timepoint')
-    s_ = s_.join(timepoint)
+    s_ = s_.join(timepoint)                       
 
     df = s_[[horizon.name, 'timepoint']].astype(str)
     s_['timepoint'] = pd.to_numeric(df[horizon.name] + df['timepoint'].str.zfill(len(str(max(df['timepoint'], key=len)))))
@@ -582,20 +593,20 @@ def create_horizon_timepoints(structure, balancing_type_horizon):
 def create_temporal_subscenario_data(base:Subscenario,
                                      balancing_type_horizon:str,
                                      granularity:str,
-                                     id_:int):
+                                     id_:int,
+                                     map_file):
     hparams = base.horizon_params
     base_balancing_type = hparams['balancing_type_horizon'].unique()[0]
     bt = BALANCING_TYPE
     if balancing_type_horizon not in bt:
         raise ValueError("Wrong input for steps, possible steps are")
-    if bt[balancing_type_horizon] > bt[base_balancing_type]:
+    if bt[balancing_type_horizon] > bt[base_balancing_type]: # WHY?
         raise ValueError(f"New subscenario Can not have more steps than base subscenario")
     
-    structure = create_structure(base, balancing_type_horizon, granularity)
+    structure = create_structure(base, balancing_type_horizon, granularity, map_file)
     period_params = create_period_params(base)
     horizon_params = create_horizon_params(base, balancing_type_horizon, structure)
     horizon_timepoints = create_horizon_timepoints(structure, balancing_type_horizon )
-
     return structure,horizon_params,horizon_timepoints,period_params
     
 
@@ -742,7 +753,6 @@ def update_hydro_op_chars(opcharsdf,
     period = subtemporal.period_params.period.iloc[0]
     for hopc_scid, project in zip(hopcscid, hprojects):
         if hydro_dir:
-            print(hopc_scid, project)
             csvs = [f for f in os.listdir(hydro_dir) if f.startswith(f"{project}-{hopc_scid}")]
             if csvs:
                 filename = os.path.join(hydro_dir, csvs[0])
@@ -802,9 +812,9 @@ def update_load_scenario_id(load_scid,
                             update):
     lscid = Subscenario('load_scenario_id',
                         load_scid, basetemporal.csv_location)
+    
     d = lscid.data
     load_zones = d.load_zone.unique()
-    print(load_scid)
     for zone in load_zones:
         if len(subset_data(d, subtemporal))==0 or update:
             d = subset_data(d[d.load_zone==zone], basetemporal)
@@ -833,7 +843,9 @@ def create_new_scenario(base_scenario,
                         hydroopchars_dir,
                         db_path,
                         gridpath_rep,
+                        map_file,
                         update=False):
+                        
     """
     create a new scenario using a base scenario (assumed daily).
     In the new scenario temporal definations are 
@@ -843,7 +855,7 @@ def create_new_scenario(base_scenario,
     base = Scenario(csv_location, base_scenario)
     temporal_base = base.get_subscenario('temporal_scenario_id')
     t_id = next_available_subscenario_id(temporal_base)
-    temporal = create_temporal_subscenario(temporal_base, steps, granularity, t_id)
+    temporal = create_temporal_subscenario(temporal_base, steps, granularity, t_id, map_file)
     project_availability_base = base.get_subscenario('project_availability_scenario_id')
     pa_id = next_available_subscenario_id(project_availability_base)
     project_availability = create_availability_subscenario(csv_location,
@@ -955,6 +967,8 @@ def update_project_based_subscenarios_to_db(subscenario,
 @click.option("-d", "--database", default="../mh.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../", help="Path of gridpath source repository")
 @click.option("-u", "--update/--no-update", default=False, help="Update new data in csv files even if it exists.")
+@click.option("-m", "--map_file", default='../../../db/timepoint_map_2040.xlsx', help="Base scenario from which other scenario will be generated.")
+
 def main(base_scenario,
          output_scenario,
          steps,
@@ -965,6 +979,8 @@ def main(base_scenario,
          csv_location,
          database,
          gridpath_rep,
+         create_new_scenario,
+         map_file,
          update):
     create_new_scenario(base_scenario,
                         output_scenario,
@@ -976,7 +992,8 @@ def main(base_scenario,
                         hydro_dir,
                         database ,
                         gridpath_rep,
-                        update
+                        map_file,
+                        update                        
                         )
     
 if __name__ == "__main__":

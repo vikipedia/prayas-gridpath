@@ -87,11 +87,20 @@ def update_scenario_via_gridpath(scenario,
 
 def run_scenario(scenario,
                  csv_location,
-                 db_path):
-    cmd = "gridpath_run_e2e --scenario {scenario} --database {db_path}"
+                 db_path):                 
+    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass3_auto_pass1 --database ..\..\..\db\toy2.db"
+    scen_loca = '../../../scenarios/toy_run_seq1'
+    cmd = "gridpath_run_e2e --scenario %s --database %s --log --scenario_location %s"%(scenario, db_path, scen_loca)
+    #cmd = "gridpath_run_e2e --scenario %s --database %s "%(scenario, db_path)
+    
+    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass1 --database ../../../db/VP.db --solver cplex"
     print(cmd)
-    out_bytes = subprocess.check_output(cmd, shell=True)
-    print(out_bytes.decode())
+
+    out_bytes = subprocess.run(cmd, shell=True) #- "check_output" needs zero output
+    #rc, out_bytes = subprocess.getstatusoutput(cmd)
+    #print(rc,'rc')
+    print('*#*#*', out_bytes,'out_bytes', '*#*#*#*')
+    #print(out_bytes.decode()) #- decode() gives error and not getting used in the script so can be skipped
     
 
 def create_command(subscenario,
@@ -119,7 +128,6 @@ def update_subscenario_via_gridpath(subscenario,
     
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
-    print(cmd)
     
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
@@ -129,22 +137,27 @@ def update_subscenario_via_gridpath(subscenario,
     print(stdout.decode())
     print(stderr.decode())
 
+#import logging
+#logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
 def merge_in_csv(results,
                  csvpath, cols, on):
+    #logging.info("Entry")
     csvresults = results.loc[:, cols]
     index = csvresults[on]
     csvresults.set_index(index, inplace=True)
-
+    
     allcsv = pd.read_csv(csvpath, index_col=on)
-    try:
+
+    try:                                              
         allcsv.loc[index.min():index.max()] = csvresults
     except ValueError as v:
         print("Failed to merge {} {}-{}".format(on, index.min(),
                                                         index.max()))
         print("Continuing ....by appending")
         allcsv = pd.concat([allcsv, csvresults])
+
     allcsv[on] = allcsv.index
     print(f"Merging results to {csvpath}")
     allcsv.to_csv(csvpath, index=False, columns=cols)
-
+    #logging.info("Exit")
