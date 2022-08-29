@@ -16,8 +16,8 @@ import hydro_opchars
 @click.option("-d", "--database", default="../../../db/toy1.db", help="Path to database")
 @click.option("-g", "--gridpath_rep", default="../../..", help="Path of gridpath source repository")
 @click.option("-u", "--update/--no-update", default=True, help="Update new data in csv files even if it exists.")
-@click.option("-m", "--map_file", default=None, help="Base scenario from which other scenario will be generated.")
-#@click.option("-m", "--map_file", default='../../../db/timepoint_map_2025_old_format.xlsx', help="Base scenario from which other scenario will be generated.")
+#@click.option("-m", "--map_file", default=None, help="Base scenario from which other scenario will be generated.")
+@click.option("-m", "--map_file", default='../../../db/timepoint_map_2025_old_format.xlsx', help="Base scenario from which other scenario will be generated.")
 
 def main(base_scenario,
          availability_pass1,    
@@ -50,7 +50,6 @@ def main(base_scenario,
     if not common.run_scenario(pass1, csv_location, database):
         print('Run failed for scenario %s, exiting gracefully'%pass1)
         return
-        
     pass2 = base_scenario + "_auto_pass2"
     scenario_generation.create_new_scenario(base_scenario,
                                             pass2,
@@ -78,28 +77,32 @@ def main(base_scenario,
                                                  project=None,
                                                  name=base_scenario+"auto",
                                                  update_database=True)
-    hydro_opchars.hydro_op_chars(pass1,
-                                 pass2,
+                                                 
+    hydro_opchars.hydro_op_chars(database, 
                                  csv_location,
-                                 database,
                                  gridpath_rep,
+                                 pass1,pass2,
+                                 base_scenario+"_auto_pass2",
                                  None,
-                                 True,
-                                 description=base_scenario+"auto")
+                                 map_file, 
+                                 True
+                                 )
 
     
     if not common.run_scenario(pass2, csv_location, database):
         print('Run failed for scenario %s, exiting gracefully'%pass2)    
         return
     
-    hydro_opchars.hydro_op_chars(pass2,
-                                 base_scenario,
+    hydro_opchars.hydro_op_chars(database,
                                  csv_location,
-                                 database,
                                  gridpath_rep,
+                                 pass2,
+                                 base_scenario,                                 
+                                 base_scenario+"_auto_pass3",
                                  None,
-                                 True,
-                                 description=base_scenario+"auto")
+                                 map_file,
+                                 True                      
+                                 )                                
 
     if not common.run_scenario(base_scenario, csv_location, database):
         print('Run failed for scenario %s, exiting gracefully'%base_scenario)
