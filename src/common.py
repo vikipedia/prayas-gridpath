@@ -149,24 +149,25 @@ def update_subscenario_via_gridpath(subscenario,
 #logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
 
+def override_dataframe(dataframe1, dataframe2, index_cols):
+    """override data from dataframe2 in dataframe1 using
+    index_cols as a key to compare. 
+    """
+    dx = dataframe1.to_dict(orient="records")
+    dy = dataframe2.to_dict(orient="records")
+    ddx = {tuple(r[c] for c in index_cols): r for r in dx}
+    ddy = {tuple(r[c] for c in index_cols): r for r in dy}
+
+    ddx.update(ddy)
+    return pd.DataFrame(ddx.values())
+
+
 def merge_in_csv(results,
                  csvpath, cols, on):
     # logging.info("Entry")
     csvresults = results.loc[:, cols]
-    index = csvresults[on]
-    csvresults.set_index(index, inplace=True)
-
-    allcsv = pd.read_csv(csvpath, index_col=on)
-
-    try:
-        allcsv.loc[index.min():index.max()] = csvresults
-    except ValueError as v:
-        print("Failed to merge {} {}-{}".format(on, index.min(),
-                                                index.max()))
-        print("Continuing ....by appending")
-        allcsv = pd.concat([allcsv, csvresults])
-
-    allcsv[on] = allcsv.index
+    allcsv = pd.read_csv(csvpath)
+    df = override_dataframe(allcsv, csvresults, [on])
     print(f"Merging results to {csvpath}")
-    allcsv.to_csv(csvpath, index=False, columns=cols)
+    df.to_csv(csvpath, index=False, columns=cols)
     # logging.info("Exit")

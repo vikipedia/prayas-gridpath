@@ -108,7 +108,7 @@ def main(base_scenario,
                                          database,
                                          map_file,
                                          gridpath_rep,
-                                         skip_scenario2=None,
+                                         skip_scenario2=False,
                                          project=None,
                                          name=base_scenario+"auto",
                                          update_database=True)
