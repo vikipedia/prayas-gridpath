@@ -5,9 +5,6 @@ import common
 import os
 import click
 
-# decimal precision for hydro_opchar capacity factors
-def PRECISION():
-    return 9
 
 def hydro_op_chars_inputs_(webdb, project,
                            hydro_op_chars_sid,
@@ -85,7 +82,7 @@ def adjust_mean_const(b, min_, max_):
     def adjust(c):
         c1 = c.copy()
         less, more, between = c < min_, c > max_, (c >= min_) & (c <= max_)
-
+        
         if less.sum() and more.sum():
             # print("+-"*5)
             c1[less] += (c1[more] - max_[more]).sum()/less.sum()
@@ -174,20 +171,19 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     weight = power_mw_df['number_of_hours_in_timepoint']
     prd = power_mw_df['period'].unique()[0]
     df = df0[df0.period == prd].reset_index(drop = True)
-    df.min_power_fraction = df.min_power_fraction.round(decimals = PRECISION())
-    df.max_power_fraction = df.max_power_fraction.round(decimals = PRECISION())
     min_, max_ = [df[c] for c in cols[-2:]]
 
     if len(cuf) > len(min_):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
         cuf = power_mw_df['power_mw']/capacity
         weight = power_mw_df['number_of_hours_in_timepoint']
-        
+
+
     avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)
     results = df[cols].copy()
 
     del results['average_power_fraction']
-    results['average_power_fraction'] = (avg/weight).round(decimals = PRECISION())
+    results['average_power_fraction'] = avg/weight
 
     return results
 

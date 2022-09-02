@@ -8,7 +8,7 @@ import numpy as np
 import datetime
 import common
 import shutil
-
+import re
 
 BALANCING_TYPE = {"year": 1,
                   "month": 12,
@@ -20,6 +20,32 @@ GRAN = {1: "yearly",
         365*4: "6hr",
         365*24: "hourly",
         365*96: "15min"}
+
+
+
+def get_granularity_steps(timepoint_map, pass_type="pass1"):
+    horizonp = re.compile(f"{pass_type}_horizon_(?P<steps>[a-z0-9]+)")
+    granularityp = re.compile(f"{pass_type}_timepoint_(?P<gran>[a-z0-9]+)")
+    for c in timepoint_map.columns:
+        m1 = horizonp.match(c)
+        if m1:
+            steps = m1.groupdict()['steps']
+            continue
+        m3 = granularityp.match(c)
+        if m3:
+            granularity = m3.groupdict()['gran']
+            continue
+
+    granmap = {"year": "yearly",
+               "month": "monthly",
+               "24hr": "daily",
+               "6hr": "6hr",
+               "hour": "hourly",
+               "15min": "15min"}
+
+    if granularity not in granmap.values():
+        granularity = granmap[granularity]
+    return granularity, steps
 
 
 class InvalidSubscenario(Exception):
@@ -82,22 +108,21 @@ class Scenario(CSVLocation):
 
 
 def test_scenario_class():
-    rpo30 = Scenario(
-        "/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh", "rpo30")
+    base = Scenario(
+        "/home/vikrant/programming/work/publicgit/gridpath/db/toy2", "FY40_RE80_pass3")
 
-    assert rpo30.scenario_name == "rpo30"
-    assert rpo30.csv_location == "/home/vikrant/programming/work/publicgit/gridpath/db/csvs_mh"
-    assert rpo30.temporal_scenario_id == 5
-    assert rpo30.load_zone_scenario_id == 1
-    assert rpo30.load_scenario_id == 1
-    assert rpo30.project_portfolio_scenario_id == 1
-    assert rpo30.project_operational_chars_scenario_id == 3
-    assert rpo30.project_availability_scenario_id == 3
-    assert rpo30.project_load_zone_scenario_id == 1
-    assert rpo30.project_specified_capacity_scenario_id == 1
-    assert rpo30.project_specified_fixed_cost_scenario_id == 1
-    assert rpo30.solver_options_id == 1
-    assert rpo30.temporal_scenario_id == 5
+    assert base.scenario_name == "FY40_RE80_pass3"
+    assert base.csv_location == "/home/vikrant/programming/work/publicgit/gridpath/db/toy2"
+    assert base.temporal_scenario_id == 3
+    assert base.load_zone_scenario_id == 1
+    assert base.load_scenario_id == 1
+    assert base.project_portfolio_scenario_id == 3
+    assert base.project_operational_chars_scenario_id == 8
+    assert base.project_availability_scenario_id == 9
+    assert base.project_load_zone_scenario_id == 1
+    assert base.project_specified_capacity_scenario_id == 1
+    assert base.project_specified_fixed_cost_scenario_id == 1
+    assert base.solver_options_id == 2
 
 
 class Subscenario(CSVLocation):
@@ -233,7 +258,7 @@ class Subscenario(CSVLocation):
             path = os.path.join(scid_folder, name + ".csv")
             if os.path.exists(path):
                 df = pd.read_csv(path)
-                df = df.merge(value, on=merge_on)
+                df = df.merge(value, on=merge_on, how="outer")
             else:
                 df = value
 
@@ -272,10 +297,10 @@ def create_temporal_subscenario(base: Subscenario,
                                 balancing_type_horizon: str,
                                 granularity: str,
                                 id_: int,
-                                map_file):
+                                timepoint_map:pd.DataFrame):
 
     structure, horizon_params, horizon_timepoints, period_params = create_temporal_subscenario_data(
-        base, balancing_type_horizon, granularity, id_, map_file)
+        base, balancing_type_horizon, granularity, id_, timepoint_map)
     steps = len(structure['subproblem_id'].unique())
     granularity = len(structure[structure.spinup_or_lookahead == 0])
     d = GRAN
@@ -532,7 +557,7 @@ def collapse(data,
 def create_structure(base: Subscenario,
                      balancing_type_horizon: str,
                      granularity: str,
-                     map_file):
+                     timepoint_map):
 
     ns = [key for key, value in GRAN.items() if value == granularity]
     if not ns:
@@ -560,7 +585,7 @@ def create_structure(base: Subscenario,
     s_ = firstcols.join(sumcols).join(subproblem_id)
     s_ = create_timepoint_horizon_cols(s_,
                                        balancing_type_horizon,
-                                       map_file,
+                                       timepoint_map,
                                        granularity)
     s_['linked_timepoint'].iloc[:] = np.nan
     colnames = ['subproblem_id', 'stage_id', 'timepoint', 'period', 'number_of_hours_in_timepoint', 'timepoint_weight',
@@ -568,7 +593,7 @@ def create_structure(base: Subscenario,
     return s_[colnames]
 
 
-def create_timepoint_horizon_cols(s_, horizon, map_file, granularity):
+def create_timepoint_horizon_cols(s_, horizon, timepoint_map, granularity):
     """
     s_ is dataframe containing columns with name timestamp in '%d-%m-%Y %H:%M' format
     make use
@@ -578,11 +603,6 @@ def create_timepoint_horizon_cols(s_, horizon, map_file, granularity):
 
     s_.sort_values('timestamp_', inplace=True)
     s_.reset_index(inplace=True)
-
-    timepoint_map = pd.read_excel(map_file,
-                                  sheet_name="map",
-                                  skiprows=2,
-                                  engine='openpyxl')
 
     timepoint_cols = [
         c for c in timepoint_map.columns if "timepoint" in c and granularity in c]
@@ -626,7 +646,7 @@ def create_temporal_subscenario_data(base: Subscenario,
                                      balancing_type_horizon: str,
                                      granularity: str,
                                      id_: int,
-                                     map_file):
+                                     timepoint_map):
     hparams = base.horizon_params
     base_balancing_type = hparams['balancing_type_horizon'].unique()[0]
     bt = BALANCING_TYPE
@@ -637,7 +657,7 @@ def create_temporal_subscenario_data(base: Subscenario,
             f"New subscenario Can not have more steps than base subscenario")
 
     structure = create_structure(
-        base, balancing_type_horizon, granularity, map_file)
+        base, balancing_type_horizon, granularity, timepoint_map)
     period_params = create_period_params(base)
     horizon_params = create_horizon_params(
         base, balancing_type_horizon, structure)
@@ -749,7 +769,9 @@ def create_project_operational_chars_subscenario(opchars_base: Subscenario,
                                                  granularity,
                                                  desc: str,
                                                  update,
-                                                 hydroopchars_dir=None):
+                                                 base,
+                                                 hydroopchars_dir=None,
+                                                 ):
     opcharsscid = Subscenario(opchars_base.name, id_,
                               opchars_base.csv_location)
     df = opchars_base.data
@@ -759,6 +781,16 @@ def create_project_operational_chars_subscenario(opchars_base: Subscenario,
     cols = ['fuel', 'heat_rate_curves_scenario_id', 'variable_om_curves_scenario_id', 'startup_chars_scenario_id', 'startup_cost_per_mw', 'shutdown_cost_per_mw', 'startup_fuel_mmbtu_per_mw', 'startup_plus_ramp_up_rate', 'shutdown_plus_ramp_down_rate', 'ramp_up_when_on_rate', 'ramp_down_when_on_rate', 'ramp_up_violation_penalty', 'ramp_down_violation_penalty', 'min_up_time_hours', 'min_up_time_violation_penalty', 'min_down_time_hours', 'min_down_time_violation_penalty', 'discharging_capacity_multiplier',
             'minimum_duration_hours', 'maximum_duration_hours', 'aux_consumption_frac_capacity', 'last_commitment_stage', 'curtailment_cost_per_pwh', 'lf_reserves_up_derate', 'lf_reserves_down_derate', 'regulation_up_derate', 'regulation_down_derate', 'frequency_response_derate', 'spinning_reserves_derate', 'lf_reserves_up_ramp_rate', 'lf_reserves_down_ramp_rate', 'regulation_up_ramp_rate', 'regulation_down_ramp_rate', 'frequency_response_ramp_rate', 'spinning_reserves_ramp_rate']
     df[cols] = np.nan
+
+    pscsid = base.get_subscenario(
+        "project_specified_capacity_scenario_id")
+    projs = list(df.project[df.operational_type=='gen_commit_cap'])
+    cdata = pscsid.data
+    period = base.get_subscenario('temporal_scenario_id').period_params.period.iloc[0]
+    for p in projs:
+        scmw = cdata.specified_capacity_mw[(cdata.project==p) & (cdata.period==period)].iloc[0]
+        df.unit_size_mw[(df.project==p)] = scmw
+    
     filename = f"{id_}_{desc}"
     opcharsscid.writedata(None, **{filename: df})
 
@@ -888,8 +920,6 @@ def update_load_scenario_id(load_scid,
 def create_new_scenario(base_scenario,
                         output_scenario,
                         csv_location,
-                        steps,
-                        granularity,
                         availability,
                         endogenous,
                         hydroopchars_dir,
@@ -903,11 +933,26 @@ def create_new_scenario(base_scenario,
     different. accordingly all time dependent files 
     should change.
     """
+    def get_pass():
+        if "pass1" in output_scenario:
+            return "pass1"
+        elif "pass2" in output_scenario:
+            return "pass2"
+        else:
+            raise Exception("Only pass1 or pass2 should be in name of scenario")
+        
+    timepoint_map = pd.read_excel(map_file,
+                                  sheet_name="map",
+                                  skiprows=2,
+                                  engine='openpyxl')
+
+    granularity, steps = get_granularity_steps(timepoint_map, get_pass())
+    
     base = Scenario(csv_location, base_scenario)
     temporal_base = base.get_subscenario('temporal_scenario_id')
     t_id = next_available_subscenario_id(temporal_base)
     temporal = create_temporal_subscenario(
-        temporal_base, steps, granularity, t_id, map_file)
+        temporal_base, steps, granularity, t_id, timepoint_map)
     project_availability_base = base.get_subscenario(
         'project_availability_scenario_id')
     pa_id = next_available_subscenario_id(project_availability_base)
@@ -928,7 +973,8 @@ def create_new_scenario(base_scenario,
                                                             granularity,
                                                             desc,
                                                             update,
-                                                            hydroopchars_dir
+                                                            base,
+                                                            hydroopchars_dir,
                                                             )
     update_load_scenario_id(base.load_scenario_id,
                             temporal_base,
@@ -1012,8 +1058,6 @@ def update_project_based_subscenarios_to_db(subscenario,
 @click.command()
 @click.option("-b", "--base_scenario", default="rpo30", help="Base scenario from which other scenario will be generated.")
 @click.option("-o", "--output_scenario", default="rpo30_monthly", help="Name of scenario to generate")
-@click.option("-s", "--steps", default="month", help="steps as one of year, month, day")
-@click.option("-t", "--granularity", default="daily", help="granularity option as one of 15min, hourly, daily, monthly, yearly")
 @click.option("-a", "--availability", default=None, help="path to availability data")
 @click.option("-e", "--endo", default=None, help="Path to file which contains endogenous availability data in single file")
 @click.option("-h", "--hydro_dir", default=None, help="Path to directory which contains data for hydro_operational_chars_scenario_id")
@@ -1025,8 +1069,6 @@ def update_project_based_subscenarios_to_db(subscenario,
 def main(base_scenario,
          output_scenario,
          steps,
-         granularity,
-         availability,
          endo,
          hydro_dir,
          csv_location,
@@ -1038,8 +1080,6 @@ def main(base_scenario,
     create_new_scenario(base_scenario,
                         output_scenario,
                         csv_location,
-                        steps,
-                        granularity,
                         availability,
                         endo,
                         hydro_dir,
