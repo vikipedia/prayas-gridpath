@@ -74,7 +74,7 @@ def get_power_mw_dataset(webdb, scenario, project):
     return pd.DataFrame(rows)
 
 
-def adjust_mean_const(b, min_, max_):
+def adjust_mean_const(b, min_, max_, force=False):
     """
     adjusts values in b such that original average of b remains as it is
     but every value of b lies between corresponding min_ and max_
@@ -102,21 +102,32 @@ def adjust_mean_const(b, min_, max_):
     c1 = adjust(b)
     #printcols(c1, min_, max_)
     n = 0
-    while n < 20 and not np.all((c1 >= min_) & (c1 <= max_)):
+    N = 30
+    while n < N and not np.all((c1 >= min_) & (c1 <= max_)):
         #print(f"iteration {n}..")
         c1 = adjust(c1)
         #printcols(c1, min_, max_)
         n += 1
-    if n == 20:
-        print("Failed to adjust mean")
+    if n == N:
+        print("adjust_mean_const: Failed to converge")
+        if force:
+            less = c1 < min_
+            more = c1 > max_
+            if less:
+                print("Setting focibly some values to min")
+                c1[less] = min_[less]
+            if more:
+                print("Setting focibly some values to min")
+                c1[more] = max_[more]
 
-    #print(b.mean(), c1.mean())
+            print("Original average:", b.mean())
+            print("After forcible adjustment:", c1.mean())
     return c1
 
 
 def printcols(*cols):
     for i, args in enumerate(zip(*cols)):
-        print(f"{i:3d}", " ".join([f"{arg:5f}" for arg in args]))
+        print(f"{i:3d}", " ".join([f"{arg:.8f}" for arg in args]))
 
 
 def get_projects(webdb, scenario):
@@ -179,11 +190,12 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
         weight = power_mw_df['number_of_hours_in_timepoint']
 
 
-    avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)
+    avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)/weight
+    avg = adjust_mean_const(avg, min_, max_, force=True)    
     results = df[cols].copy()
 
     del results['average_power_fraction']
-    results['average_power_fraction'] = avg/weight
+    results['average_power_fraction'] = avg
 
     return results
 
@@ -287,13 +299,12 @@ def main(database,
 
 
 def dbtest():
-    webdb = common.get_database(
-        "/home/vikrant/programming/work/publicgit/gridpath/mh.db")
-    scenario1 = "rpo30_pass1"
-    scenario2 = 'rpo30_pass2'
-    project = 'Koyna_Stage_3'
-    timepoint_map = "timepoint_map.xlsx"
-    adjusted_mean_results(webdb, scenario1, scenario2, project, timepoint_map)
+    webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath/db/toy2.db")
+    scenario1 = "FY40_RE80_pass3_auto_pass1"
+    scenario2 = 'FY40_RE80_pass3_auto_pass2'
+    project = 'Bhira'
+    timepoint_map = "/home/vikrant/programming/work/publicgit/gridpath/db/timepoint_map_2040.xlsx"
+    return adjusted_mean_results(webdb, scenario1, scenario2, project, timepoint_map)
 
 
 def test_1():
