@@ -82,7 +82,7 @@ def adjust_mean_const(b, min_, max_, force=False):
     def adjust(c):
         c1 = c.copy()
         less, more, between = c < min_, c > max_, (c >= min_) & (c <= max_)
-        
+
         if less.sum() and more.sum():
             # print("+-"*5)
             c1[less] += (c1[more] - max_[more]).sum()/less.sum()
@@ -113,10 +113,10 @@ def adjust_mean_const(b, min_, max_, force=False):
         if force:
             less = c1 < min_
             more = c1 > max_
-            if less:
+            if less.any():
                 print("Setting focibly some values to min")
                 c1[less] = min_[less]
-            if more:
+            if more.any():
                 print("Setting focibly some values to min")
                 c1[more] = max_[more]
 
@@ -160,7 +160,7 @@ def reduce_size(webdb, df, scenario, mapfile):
     cols = [c for c in df.columns]
     rsuffix = "_other"
     dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
-    
+
     weight = dfnew["number_of_hours_in_timepoint"]
     dfnew['power_mw_x'] = dfnew['power_mw'] * weight
     dfnew = dfnew.reset_index()
@@ -168,7 +168,7 @@ def reduce_size(webdb, df, scenario, mapfile):
     grouped['power_mw'] = grouped['power_mw_x'] / \
         grouped["number_of_hours_in_timepoint"]
 
-    #print(grouped)                 
+    # print(grouped)
     return grouped.reset_index(drop=True)
 
 
@@ -181,7 +181,7 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     cuf = power_mw_df['power_mw']/capacity
     weight = power_mw_df['number_of_hours_in_timepoint']
     prd = power_mw_df['period'].unique()[0]
-    df = df0[df0.period == prd].reset_index(drop = True)
+    df = df0[df0.period == prd].reset_index(drop=True)
     min_, max_ = [df[c] for c in cols[-2:]]
 
     if len(cuf) > len(min_):
@@ -189,9 +189,8 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
         cuf = power_mw_df['power_mw']/capacity
         weight = power_mw_df['number_of_hours_in_timepoint']
 
-
     avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)/weight
-    avg = adjust_mean_const(avg, min_, max_, force=True)    
+    avg = adjust_mean_const(avg, min_, max_, force=True)
     results = df[cols].copy()
 
     del results['average_power_fraction']
@@ -299,7 +298,8 @@ def main(database,
 
 
 def dbtest():
-    webdb = common.get_database("/home/vikrant/programming/work/publicgit/gridpath/db/toy2.db")
+    webdb = common.get_database(
+        "/home/vikrant/programming/work/publicgit/gridpath/db/toy2.db")
     scenario1 = "FY40_RE80_pass3_auto_pass1"
     scenario2 = 'FY40_RE80_pass3_auto_pass2'
     project = 'Bhira'
