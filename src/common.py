@@ -4,6 +4,7 @@ import numpy as np
 import os
 import subprocess
 
+
 class NoEntriesError(Exception):
     pass
 
@@ -18,12 +19,12 @@ def get_field(webdb, table, field, **conds):
     return r[field]
 
 
-def get_table_dataframe(webdb:web.db.SqliteDB, table:str)->pd.DataFrame:
+def get_table_dataframe(webdb: web.db.SqliteDB, table: str) -> pd.DataFrame:
     """
     read table as dataframe. 
     """
     t = pd.DataFrame(webdb.select(table).list())
-    if t.shape[0]>0:
+    if t.shape[0] > 0:
         return t
     else:
         raise NoEntriesError(f"Table {table} is empty")
@@ -51,7 +52,8 @@ def get_subscenario_csvpath(project,
                             subscenario_id,
                             csv_location, description="description"):
     path = get_subscenario_path(csv_location, subscenario)
-    csvs = [f for f in os.listdir(path) if f.startswith(f"{project}-{subscenario_id}")]
+    csvs = [f for f in os.listdir(path) if f.startswith(
+        f"{project}-{subscenario_id}")]
     if csvs:
         return os.path.join(path, csvs[0])
     else:
@@ -63,6 +65,7 @@ def get_subscenario_csvpath(project,
             f.write("stage_id,timepoint,availability_derate")
         return fpath
 
+
 def update_scenario_via_gridpath(scenario,
                                  csv_location,
                                  db_path,
@@ -72,7 +75,7 @@ def update_scenario_via_gridpath(scenario,
     args = f"--database {db_path} --csv_path {csv_path} " \
         f"--scenario {scenario}"
 
-    cmd =  " ".join(["python", script, args])
+    cmd = " ".join(["python", script, args])
     print(cmd)
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
@@ -82,26 +85,30 @@ def update_scenario_via_gridpath(scenario,
     print(stdout.decode())
     print(stderr.decode())
     #out_bytes = subprocess.check_output(cmd, shell=True)
-    #print(out_bytes.decode())
+    # print(out_bytes.decode())
 
 
 def run_scenario(scenario,
-                 csv_location,
-                 db_path):                 
-    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass3_auto_pass1 --database ..\..\..\db\toy2.db"
-    scen_loca = '../../../scenarios/toy_run_seq1'
-    cmd = "gridpath_run_e2e --scenario %s --database %s --log --scenario_location %s"%(scenario, db_path, scen_loca)
-    #cmd = "gridpath_run_e2e --scenario %s --database %s "%(scenario, db_path)
-    
-    #cmd = "gridpath_run_e2e --scenario FY40_RE80_pass1 --database ../../../db/VP.db --solver cplex"
+                 scenario_location,
+                 db_path):
+    cmd = "gridpath_run_e2e --scenario %s --database %s --log --scenario_location %s" % (
+        scenario, db_path, scenario_location)
+
     print(cmd)
 
-    out_bytes = subprocess.run(cmd, shell=True) #- "check_output" needs zero output
-    #rc, out_bytes = subprocess.getstatusoutput(cmd)
-    #print(rc,'rc')
-    print('*#*#*', out_bytes,'out_bytes', '*#*#*#*')
-    #print(out_bytes.decode()) #- decode() gives error and not getting used in the script so can be skipped
-    
+    # - "check_output" needs zero output
+
+    completed_process = subprocess.run(cmd, shell=True)
+    print(completed_process.returncode)
+
+    conn = get_database(db_path)
+    table = get_table_dataframe(conn, "scenarios")
+    run_id = table[table.scenario_name == scenario]['run_status_id'].squeeze()
+    status = True
+    if run_id != 2:
+        status = False
+    return status
+
 
 def create_command(subscenario,
                    subscenario_id,
@@ -110,25 +117,26 @@ def create_command(subscenario,
                    db_path,
                    gridpath_rep,
                    delete=True):
-    script = os.path.join(gridpath_rep, "db", "utilities", "port_csvs_to_db.py")
+    script = os.path.join(gridpath_rep, "db",
+                          "utilities", "port_csvs_to_db.py")
     args = f"--database {db_path} --csv_location {csv_location} " \
         f"--subscenario {subscenario} --subscenario_id {subscenario_id} --delete"
     if project:
         args = args + f" --project {project}"
-        
+
     return " ".join(["python", script, args])
 
-    
+
 def update_subscenario_via_gridpath(subscenario,
                                     subscenario_id,
                                     project,
                                     csv_location,
                                     db_path,
                                     gridpath_rep):
-    
+
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
-    
+
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
                          stdin=subprocess.PIPE,
@@ -140,24 +148,26 @@ def update_subscenario_via_gridpath(subscenario,
 #import logging
 #logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
+
+def override_dataframe(dataframe1, dataframe2, index_cols):
+    """override data from dataframe2 in dataframe1 using
+    index_cols as a key to compare. 
+    """
+    dx = dataframe1.to_dict(orient="records")
+    dy = dataframe2.to_dict(orient="records")
+    ddx = {tuple(r[c] for c in index_cols): r for r in dx}
+    ddy = {tuple(r[c] for c in index_cols): r for r in dy}
+
+    ddx.update(ddy)
+    return pd.DataFrame(ddx.values())
+
+
 def merge_in_csv(results,
                  csvpath, cols, on):
-    #logging.info("Entry")
+    # logging.info("Entry")
     csvresults = results.loc[:, cols]
-    index = csvresults[on]
-    csvresults.set_index(index, inplace=True)
-    
-    allcsv = pd.read_csv(csvpath, index_col=on)
-
-    try:                                              
-        allcsv.loc[index.min():index.max()] = csvresults
-    except ValueError as v:
-        print("Failed to merge {} {}-{}".format(on, index.min(),
-                                                        index.max()))
-        print("Continuing ....by appending")
-        allcsv = pd.concat([allcsv, csvresults])
-
-    allcsv[on] = allcsv.index
+    allcsv = pd.read_csv(csvpath)
+    df = override_dataframe(allcsv, csvresults, [on])
     print(f"Merging results to {csvpath}")
-    allcsv.to_csv(csvpath, index=False, columns=cols)
-    #logging.info("Exit")
+    df.to_csv(csvpath, index=False, columns=cols)
+    # logging.info("Exit")
