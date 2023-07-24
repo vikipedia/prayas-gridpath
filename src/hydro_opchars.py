@@ -150,7 +150,7 @@ def reduce_size(webdb, df, scenario, mapfile):
                                   skiprows=2,
                                   engine="openpyxl")
     pass1 = [c for c in timepoint_map.columns if c.startswith(
-        "pass1_timepoint_")][0]
+        "pass1_timepoint")][0]
     t_map = timepoint_map.groupby(pass1).first()
 
     pass_name = "pass2" if "pass2" in scenario else "pass3"
@@ -298,6 +298,7 @@ def main(database,
 
 
 def dbtest():
+	# TODO: remove references to local path
     webdb = common.get_database(
         "/home/vikrant/programming/work/publicgit/gridpath/db/toy2.db")
     scenario1 = "FY40_RE80_pass3_auto_pass1"

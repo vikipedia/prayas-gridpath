@@ -112,6 +112,7 @@ def create_table_for_results(availability_derate,
     r['project'] = project
     r['exogenous_availability_scenario_id'] = exo_id
     r['stage_id'] = stage_id.reset_index()['stage_id']
+    r['hyb_stor_cap_availability_derate'] = None
     return r
 
 
@@ -126,32 +127,35 @@ def get_exogenous_results_(conn,
                 "exogenous_availability_scenario_id",
                 "stage_id",
                 "timepoint",
-                "availability_derate"]
+                "availability_derate",
+                "hyb_stor_cap_availability_derate"]
 
     timepoint_map = pd.read_excel(mapfile,
                                   sheet_name="map",
                                   skiprows=2,
                                   engine='openpyxl')
 
+    # TODO: replace startswith with ==
     source_timepoints = [
-        c for c in timepoint_map.columns if c.startswith("pass1_timepoint_")][0]
+        c for c in timepoint_map.columns if c.startswith("pass1_timepoint")][0]
 
     if scenario3:
         exo_id_value = get_exogenous_avail_id(conn, scenario3, project)
         target_timepoints = [
-            c for c in timepoint_map.columns if c.startswith("pass3_timepoint_")][0]
+            c for c in timepoint_map.columns if c.startswith("pass3_timepoint")][0]
     else:
         exo_id_value = get_exogenous_avail_id(conn, scenario2, project)
         target_timepoints = [
-            c for c in timepoint_map.columns if c.startswith("pass2_timepoint_")][0]
+            c for c in timepoint_map.columns if c.startswith("pass2_timepoint")][0]
     params = (pass1_results, scenario2, scenario3,
               project, colnames, exo_id_value)
 
+    # TODO: incorporate timepoint weight?
     timepoints = np.array(pass1_results['timepoint'].unique())
     if 'number_of_hours_in_timepoint' not in timepoint_map.columns:
         df_tmp = common.get_table_dataframe(conn, 'inputs_temporal')
         df_tmp_sc1 = df_tmp[df_tmp.temporal_scenario_id == get_temporal_scenario_id(conn, scenario1)].reset_index(drop=True)
-        col_tp = [ c for c in timepoint_map.columns if c.startswith("pass1_timepoint_")][0]
+        col_tp = [ c for c in timepoint_map.columns if c.startswith("pass1_timepoint")][0]
         timepoint_map = timepoint_map.set_index(col_tp, drop = False).join(df_tmp_sc1[['timepoint', 'number_of_hours_in_timepoint']].set_index('timepoint'))
     if len(timepoints) > len(timepoint_map[target_timepoints].unique()):
         t_map_g = timepoint_map.groupby(source_timepoints)
@@ -182,22 +186,24 @@ def get_exogenous_results_(conn,
 def get_exogenous_results(scenario1, scenario2, scenario3, fo,
                           project, db_path, mapfile):
     conn = common.get_database(db_path)
-    results, monthly = get_exogenous_results_(conn,
+    results, pass1_results = get_exogenous_results_(conn,
                                               scenario1,
                                               scenario2,
                                               scenario3,
                                               project,
                                               mapfile)
     if scenario3 and isinstance(fo, pd.DataFrame):
+        print("Combining forced outage...")
         derate = combine_forced_outage(results, fo, project)
         results['availability_derate'] = derate
 
-    return results, monthly
+    return results, pass1_results
 
 
 def merge_in_csv(results,
                  csvpath):
-    cols = ['stage_id', 'timepoint', 'availability_derate']
+    cols = ['stage_id', 'timepoint', 'availability_derate',
+            'hyb_stor_cap_availability_derate']
     on = 'timepoint'
     common.merge_in_csv(results, csvpath, cols, on)
 
@@ -240,7 +246,7 @@ def write_exogenous_via_gridpath_script(scenario1,
                                         mapfile,
                                         description,
                                         update_database):
-    results, monthly = get_exogenous_results(scenario1,
+    results, pass1_results = get_exogenous_results(scenario1,
                                              scenario2,
                                              scenario3,
                                              fo,
@@ -257,8 +263,8 @@ def write_exogenous_via_gridpath_script(scenario1,
                                              subscenario_id,
                                              csv_location,
                                              description)
-    if not scenario3:
-        merge_in_csv(monthly, csvpath)
+    # if not scenario3:
+    #     merge_in_csv(pass1_results, csvpath)
 
     if update_database and sanity_check(csvpath):
         common.update_subscenario_via_gridpath(subscenario, subscenario_id,
@@ -307,6 +313,7 @@ def endogenous_to_exogenous(scenario1: str,
                             name: str,
                             update_database: bool):
 
+    # TODO: Make this an if-else
     projs = find_projects_to_copy(scenario1, scenario2, database)
     if project:
         projs = [project]
@@ -327,12 +334,18 @@ def endogenous_to_exogenous(scenario1: str,
                                                 update_database=update_database)
 
     if scenario3:
+        # TODO: No need to do this since it is done outside the loop?
         projs = find_projects_to_copy(scenario1, scenario3, database)
         if project:
             projs = [project]
 
         if fo:
-            print("Reading forced outage excel workbook")
+            print("Reading forced outage csv")
+            # TODO: 1) remove hardcoding of number of rows?
+            #       2) variable 'fo' being used for filename and dataframe?
+            #       3) Why read the csv twice?
+            #       4) adjust for the fact that not all projects that have
+            #          an exo avlbl scenario id defined would have an fo input
             # fo_all = pd.read_excel(fo,
                                    # sheet_name="gridpath-input",
                                    # nrows=35041,
@@ -360,8 +373,7 @@ def endogenous_to_exogenous(scenario1: str,
                                                        mapfile)
 
             conn = common.get_database(database)
-            table = common.get_table_dataframe(
-                conn, "inputs_project_availability")
+            table = common.get_table_dataframe(conn, "inputs_project_availability")
                 
             table.dropna(subset=['exogenous_availability_scenario_id'], inplace=True)            
             table_scenario = common.get_table_dataframe(conn, "scenarios")                
@@ -372,13 +384,14 @@ def endogenous_to_exogenous(scenario1: str,
             exo_prj = list(set([x for x in table.project if ((x not in projs) and (x in list(table_pf.project)))]))
                         
             for prj in exo_prj:
-                df_ava['availability_derate'] = fo_all[prj]
-                subscenario, subscenario_id = write_exogenous_results_csv(df_ava,
+                if prj in fo_all.columns:
+                    df_ava['availability_derate'] = fo_all[prj]
+                    subscenario, subscenario_id = write_exogenous_results_csv(df_ava,
                                                                           prj,
                                                                           csv_location,
                                                                           name)
-                if update_database:
-                    common.update_subscenario_via_gridpath(subscenario,
+                    if update_database:
+                        common.update_subscenario_via_gridpath(subscenario,
                                                            subscenario_id,
                                                            prj, csv_location,
                                                            database,
