@@ -4,8 +4,43 @@ import numpy as np
 import common
 import os
 import click
+import availability
+import pytest
 
 
+def read_exogenous_availabilty_results(webdb, scenario, project):
+    exo_avail_id = availability.get_exogenous_avail_id(webdb, scenario, project)
+    table = "inputs_project_availability_exogenous"
+    return common.filtered_table(webdb,
+                                 table,
+                                 project=project,
+                                 exogenous_availability_scenario_id=exo_avail_id)
+
+
+def read_inputs_temporal(webdb, scenario):
+    temporal_scenario_id = availability.get_temporal_scenario_id(webdb, scenario)
+    return common.filtered_table(webdb,
+                                 "inputs_temporal",
+                                 temporal_scenario_id = temporal_scenario_id)
+
+
+def read_inputs_temporal_horizon_timepoints(webdb, scenario):
+    temporal_scenario_id = availability.get_temporal_scenario_id(webdb, scenario)
+    return common.filtered_table(webdb,
+                                 "inputs_temporal_horizon_timepoints",
+                                 temporal_scenario_id = temporal_scenario_id)
+
+
+def compute_availability(availability_data,
+                         inputs_temporal,
+                         inputs_temporal_horizon_timepoints):
+    a = availability_data.merge(inputs_temporal, on="timepoint")
+    a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
+    a.availability_derate = a.availability_derate * a.weights / a.weights.sum()
+    a = a.merge(inputs_temporal_horizon_timepoints, on='timepoint')
+    return a.groupby('horizon', sort=False)['availability_derate'].sum().reset_index()
+
+    
 def hydro_op_chars_inputs_(webdb, project,
                            hydro_op_chars_sid,
                            balancing_type_project):
@@ -96,17 +131,17 @@ def adjust_mean_const(b, min_, max_, force=False):
             c1[between] -= (min_[less] - c1[less]).sum()/between.sum()
             c1[less] = min_[less]
 
-        #print(c.mean(), c1.mean())
+        # print(c.mean(), c1.mean())
         return c1
 
     c1 = adjust(b)
-    #printcols(c1, min_, max_)
+    # printcols(c1, min_, max_)
     n = 0
     N = 30
     while n < N and not np.all((c1 >= min_) & (c1 <= max_)):
-        #print(f"iteration {n}..")
+        # print(f"iteration {n}..")
         c1 = adjust(c1)
-        #printcols(c1, min_, max_)
+        # printcols(c1, min_, max_)
         n += 1
     if n == N:
         print("adjust_mean_const: Failed to converge")
@@ -169,10 +204,51 @@ def reduce_size(webdb, df, scenario, mapfile):
         grouped["number_of_hours_in_timepoint"]
 
     # print(grouped)
-    return grouped.reset_index(drop=True)
+    return grouped.reset_index()
+
+
+def compute_adjusted_variables(derate, avg, min_, max_):
+    min_ = np.where(derate <= 1e-6, min_, np.fmin(min_/derate, 1))
+    max_ = np.where(derate <= 1e-6, max_, np.fmin(max_/derate, 1))
+    avg = np.fmax(np.fmin(np.where(derate <= 1e-6, 0, np.fmin(avg/derate, 1)),
+                          max_),
+                  min_)
+    return avg, min_, max_
+
+
+def test_compute_adjusted_variables():
+    avg = pd.Series([0.5,0.8,0.8,0.7,0.1])
+    min_ = pd.Series([0.2,0,0,0.2,0.2])
+    max_ = pd.Series([0.6,1,1,0.6,0.6])
+
+    derate = pd.Series([0.75,0.75,0,0.75,0.75])
+
+    avg, min_, max_ = compute_adjusted_variables(derate,
+                                                 avg,
+                                                 min_,
+                                                 max_)
+    assert pytest.approx(avg) == [0.666666666666667,1,0,0.8,0.266666666666667]
+    assert pytest.approx(min_) == [0.266666666666667,0,0,0.266666666666667,0.266666666666667]
+    assert pytest.approx(max_) == [0.8,1,1,0.8,0.8]
+
+
+def availability_adjustment(webdb, scenario, project, avg, min_, max_):
+    a = read_exogenous_availabilty_results(webdb, scenario, project)
+    it = read_inputs_temporal(webdb, scenario)
+    itht = read_inputs_temporal_horizon_timepoints(webdb, scenario)
+    a = compute_availability(a, it, itht)
+    print(a['horizon'])
+    derate = a['availability_derate']
+    return compute_adjusted_variables(derate, avg, min_, max_)
 
 
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
+    """adjusting of mean happens based on 
+
+    Assumption: The columns min,max,avg(cuf) are assumed to be in 
+    the same order (ascending/descending) of horizon. If it is different,
+    then we need to adjust the order befor doing calculation!
+    """
     cols = ["balancing_type_project", "horizon", "period",
             "average_power_fraction", "min_power_fraction", "max_power_fraction"]
     df0 = hydro_op_chars_inputs(webdb, scenario2, project)
@@ -183,12 +259,14 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     prd = power_mw_df['period'].unique()[0]
     df = df0[df0.period == prd].reset_index(drop=True)
     min_, max_ = [df[c] for c in cols[-2:]]
-
+    
     if len(cuf) > len(min_):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
         cuf = power_mw_df['power_mw']/capacity
         weight = power_mw_df['number_of_hours_in_timepoint']
-
+    
+    avg, min_, max_ = availability_adjustment(webdb, scenario2, project, cuf, min_, max_)
+    
     avg = adjust_mean_const(cuf*weight, min_*weight, max_*weight)/weight
     avg = adjust_mean_const(avg, min_, max_, force=True)
     results = df[cols].copy()
@@ -250,6 +328,7 @@ def hydro_op_chars(database,
 
         results = adjusted_mean_results(
             webdb, scenario1, scenario2, project_, mapfile)
+    
         write_results_csv(results,
                           project_,
                           subscenario,
@@ -298,7 +377,7 @@ def main(database,
 
 
 def dbtest():
-	# TODO: remove references to local path
+    # TODO: remove references to local path
     webdb = common.get_database(
         "/home/vikrant/programming/work/publicgit/gridpath/db/toy2.db")
     scenario1 = "FY40_RE80_pass3_auto_pass1"
@@ -313,7 +392,7 @@ def test_1():
     project = 'Koyna_Stage_1'
     hydro_dispatch = pd.read_excel(
         datapath, sheet_name=project, nrows=365, engine="openpyxl")
-    #hydro_dispatch = hydro_dispatch.dropna(axis=0)
+    # hydro_dispatch = hydro_dispatch.dropna(axis=0)
     b = hydro_dispatch['avg']
     min_ = hydro_dispatch['min']
     max_ = hydro_dispatch['max']

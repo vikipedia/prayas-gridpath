@@ -87,14 +87,6 @@ webdb = common.get_database(
     "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/mh.db")
 
 
-def filtered_table(webdb, table, **conds):
-    rows = webdb.where(table, **conds).list()
-    if rows:
-        return pd.DataFrame(rows)
-    else:
-        raise common.NoEntriesError(f"No entries in {table} for {conds}")
-
-
 def get_generic_col(size, dtype, value):
     col = np.empty(size, dtype=dtype)
     col[:] = value

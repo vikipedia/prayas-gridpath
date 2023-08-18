@@ -30,6 +30,14 @@ def get_table_dataframe(webdb: web.db.SqliteDB, table: str) -> pd.DataFrame:
         raise NoEntriesError(f"Table {table} is empty")
 
 
+def filtered_table(webdb, table, **conds):
+    rows = webdb.where(table, **conds).list()
+    if rows:
+        return pd.DataFrame(rows)
+    else:
+        raise NoEntriesError(f"No entries in {table} for {conds}")
+
+    
 def get_database(db_path):
     db = web.database("sqlite:///" + db_path)
     db.printing = False
