@@ -15,16 +15,34 @@ def read_availabilty_results(conn, scenario_name, project):
     read results_project_availability_endogenous table
     for given scenario and project
     """
-    table = common.get_table_dataframe(
-        conn, "results_project_availability_endogenous")
     scenario_id = get_scenario_id(conn, scenario_name)
-    r = table[(table.project == project) & (table.scenario_id == scenario_id)]
+    r = common.filtered_table(conn,
+                              "results_project_availability_endogenous",
+                              project=project,
+                              scenario_id=scenario_id)
     if r.shape[0] > 0:
         return r
     else:
         raise common.NoEntriesError(
             f"Availability results for {project} and {scenario_name} are not there in table results_project_availability_endogenous")
 
+
+def availability_precision_correction(availability, decimals=1):
+    r = availability
+    if (r.availability_derate < 0).sum() < 0:
+        print("Warning: Some values of availability_derate were negative, focefully setting them to 0")
+    if (r.availability_derate > 1).sum() > 1:
+        print("Warning: Some values of availability_derate were more than 1, focefully setting them to 1")
+    r['availability_derate'] = np.where(r.availability_derate < 0,
+                                        0,
+                                        r.availability_derate)
+    r['availability_derate'] = np.where(r.availability_derate > 1,
+                                        1,
+                                        r.availability_derate)
+    r['availability_derate'] = np.round(r.availability_derate,
+                                        decimals=decimals)
+
+    return r
 
 @functools.lru_cache(maxsize=None)
 def get_exogenous_avail_id(conn, scenario, project):
@@ -115,6 +133,7 @@ def get_exogenous_results_(conn,
                            project=None,
                            mapfile=None):
     pass1_results = read_availabilty_results(conn, scenario1, project)
+    pass1_results = availability_precision_correction(pass1_results)
     colnames = ["project",
                 "exogenous_availability_scenario_id",
                 "stage_id",
