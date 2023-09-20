@@ -39,9 +39,13 @@ def compute_availability(availability_data,
                          inputs_temporal_horizon_timepoints):
     a = availability_data.merge(inputs_temporal, on="timepoint")
     a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
-    a.availability_derate = a.availability_derate * a.weights / a.weights.sum()
+    a.availability_derate = a.availability_derate * a.weights
     a = a.merge(inputs_temporal_horizon_timepoints, on='timepoint')
-    return a.groupby('horizon', sort=False)['availability_derate'].sum().reset_index()
+    g = a.groupby('horizon', sort=False)[
+        ['availability_derate', 'weights']].sum()
+    derate = (g['availability_derate']/g['weights'])
+    derate.name = "availability_derate"
+    return derate.reset_index()
 
 
 def hydro_op_chars_inputs_(webdb, project,
