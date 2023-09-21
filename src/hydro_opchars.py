@@ -281,7 +281,6 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
         power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
         cuf = power_mw_df['power_mw']/capacity
         weight = power_mw_df['number_of_hours_in_timepoint']
-
     avg, min_, max_ = availability_adjustment(
         webdb, scenario2, project, cuf, min_, max_)
     avg = adjust_mean_const(avg*weight, min_*weight, max_*weight)/weight
@@ -290,7 +289,8 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
 
     del results['average_power_fraction']
     results['average_power_fraction'] = avg
-
+    results['min_power_fraction'] = min_
+    results['max_power_fraction'] = max_
     return results
 
 
