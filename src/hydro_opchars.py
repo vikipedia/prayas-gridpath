@@ -45,7 +45,9 @@ def compute_availability(availability_data,
         ['availability_derate', 'weights']].sum()
     derate = (g['availability_derate']/g['weights'])
     derate.name = "availability_derate"
-    return derate.reset_index()
+    derate = derate.reset_index()
+    derate['horizon'] = pd.to_numeric(derate['horizon'])
+    return derate.set_index('horizon')['availability_derate']
 
 
 def hydro_op_chars_inputs_(webdb, project,
@@ -184,18 +186,35 @@ def get_projects(webdb, scenario):
     return [row['project'] for row in rows]
 
 
-def reduce_size(webdb, df, scenario, mapfile):
-    """
-    """
-    timepoint_map = pd.read_excel(mapfile,
-                                  sheet_name="map",
-                                  skiprows=2,
-                                  engine="openpyxl")
+def match_horizons(power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario2):
+    pass1_name = "pass1" if "pass1" in scenario1 else "pass2"
     pass1 = [c for c in timepoint_map.columns if c.startswith(
-        "pass1_timepoint")][0]
+        f"{pass1_name}_timepoint")][0]
     t_map = timepoint_map.groupby(pass1).first()
 
-    pass_name = "pass2" if "pass2" in scenario else "pass3"
+    pass_name = "pass2" if "pass2" in scenario2 else "pass3"
+    pass2_horizon = [
+        c for c in timepoint_map.columns if c.startswith(f"{pass_name}_horizon_")][0]
+
+    cols = [c for c in power_mw_df.columns]
+    rsuffix = "_other"
+    dfnew = power_mw_df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
+    if dfnew[pass2_horizon].isnull().sum() > 0:
+        raise Exception("Possibly supplied timepoint map is wrong.")
+
+    dfnew = dfnew.reset_index().set_index(pass2_horizon)
+    return hydro_opchar.join(dfnew, lsuffix="_X").rename(columns={'horizon': "horizon_"})
+
+
+def reduce_size(df, scenario1, scenario2, timepoint_map):
+    """
+    """
+    pass1_name = "pass1" if "pass1" in scenario1 else "pass2"
+    pass1 = [c for c in timepoint_map.columns if c.startswith(
+        f"{pass1_name}_timepoint")][0]
+    t_map = timepoint_map.groupby(pass1).first()
+
+    pass_name = "pass2" if "pass2" in scenario2 else "pass3"
     pass2_horizon = [
         c for c in timepoint_map.columns if c.startswith(f"{pass_name}_horizon_")][0]
 
@@ -213,7 +232,7 @@ def reduce_size(webdb, df, scenario, mapfile):
         grouped["number_of_hours_in_timepoint"]
 
     # print(grouped)
-    return grouped.reset_index()
+    return grouped.reset_index().rename(columns={"horizon": "horizon_", pass2_horizon: "horizon"})
 
 
 def compute_adjusted_variables(derate, avg, min_, max_):
@@ -243,7 +262,7 @@ def test_compute_adjusted_variables():
     assert pytest.approx(max_) == [0.8, 1, 1, 0.8, 0.8]
 
 
-def availability_adjustment(webdb, scenario, project, avg, min_, max_):
+def availability_adjustment(webdb, scenario, project, hydro_op):
     # if availability inputs are not available then return avg, min_, max_ as it is
     try:
         a = read_exogenous_availabilty_results(webdb, scenario, project)
@@ -251,12 +270,24 @@ def availability_adjustment(webdb, scenario, project, avg, min_, max_):
         print(
             f"Warning: Availabiity inputs not available for {scenario}/{project}")
         print(f"Skipping availability adjustment for {project}")
-        return avg, min_, max_
+        df = hydro_op.reset_index()
+        return df['cuf'], df['min_power_fraction'], df['max_power_fraction']
     it = read_inputs_temporal(webdb, scenario)
     itht = read_inputs_temporal_horizon_timepoints(webdb, scenario)
-    a = compute_availability(a, it, itht)
-    derate = a['availability_derate']
-    return compute_adjusted_variables(derate, avg, min_, max_)
+    derate = compute_availability(a, it, itht)
+    df = pd.merge(hydro_op.reset_index(), derate.reset_index())
+    return compute_adjusted_variables(df['availability_derate'],
+                                      df['cuf'],
+                                      df['min_power_fraction'],
+                                      df['max_power_fraction'])
+
+
+def organise_results(hydro_op, cols, avg, min_, max_):
+    results = hydro_op.reset_index()[cols].copy()
+    results['average_power_fraction'] = avg
+    results['min_power_fraction'] = min_
+    results['max_power_fraction'] = max_
+    return results
 
 
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
@@ -274,23 +305,34 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     cuf = power_mw_df['power_mw']/capacity
     weight = power_mw_df['number_of_hours_in_timepoint']
     prd = power_mw_df['period'].unique()[0]
-    df = df0[df0.period == prd].reset_index(drop=True)
-    min_, max_ = [df[c] for c in cols[-2:]]
+    hydro_op = df0[df0.period == prd].reset_index(
+        drop=True).set_index("horizon")
+    min_, max_ = [hydro_op[c] for c in cols[-2:]]
+    timepoint_map = pd.read_excel(mapfile,
+                                  sheet_name="map",
+                                  skiprows=2,
+                                  engine="openpyxl")
 
     if len(cuf) > len(min_):
-        power_mw_df = reduce_size(webdb, power_mw_df, scenario2, mapfile)
-        cuf = power_mw_df['power_mw']/capacity
-        weight = power_mw_df['number_of_hours_in_timepoint']
+        power_mw_df = reduce_size(
+            power_mw_df, scenario1, scenario2, timepoint_map)
+        power_mw_df = power_mw_df.set_index("horizon")
+        hydro_op = hydro_op.join(power_mw_df, rsuffix="right")
+    elif len(cuf) < len(min_):
+        Exception("power_mw needs to expand in size. Code does not handle it!")
+    else:
+        hydro_op = match_horizons(
+            power_mw_df, hydro_op, timepoint_map, scenario1, scenario2)
+
+    min_, max_ = [hydro_op[c] for c in cols[-2:]]
+    hydro_op['cuf'] = hydro_op['power_mw']/capacity
+    weight = hydro_op.reset_index()['number_of_hours_in_timepoint']
+
     avg, min_, max_ = availability_adjustment(
-        webdb, scenario2, project, cuf, min_, max_)
+        webdb, scenario2, project, hydro_op)
     avg = adjust_mean_const(avg*weight, min_*weight, max_*weight)/weight
     avg = adjust_mean_const(avg, min_, max_, force=True)
-    results = df[cols].copy()
-
-    del results['average_power_fraction']
-    results['average_power_fraction'] = avg
-    results['min_power_fraction'] = min_
-    results['max_power_fraction'] = max_
+    results = organise_results(hydro_op, cols, avg, min_, max_)
     return results
 
 
