@@ -36,11 +36,11 @@ def read_inputs_temporal_horizon_timepoints(webdb, scenario):
 
 def compute_availability(availability_data,
                          inputs_temporal,
-                         inputs_temporal_horizon_timepoints):
-    a = availability_data.merge(inputs_temporal, on="timepoint")
+                         timepoint_horizon_map):
+    a = availability_data.merge(inputs_temporal[inputs_temporal["spinup_or_lookahead"] == 0], on="timepoint")
     a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
     a.availability_derate = a.availability_derate * a.weights
-    a = a.merge(inputs_temporal_horizon_timepoints, on='timepoint')
+    a = a.merge(timepoint_horizon_map, on='timepoint')
     g = a.groupby('horizon', sort=False)[
         ['availability_derate', 'weights']].sum()
     derate = (g['availability_derate']/g['weights'])
@@ -146,7 +146,7 @@ def adjust_mean_const(b, min_, max_, force=False):
     c1 = adjust(b)
     # printcols(c1, min_, max_)
     n = 0
-    N = 30
+    N = 400
     while n < N and not np.all((c1 >= min_) & (c1 <= max_)):
         # print(f"iteration {n}..")
         c1 = adjust(c1)
@@ -235,6 +235,17 @@ def reduce_size(df, scenario1, scenario2, timepoint_map):
     return grouped.reset_index().rename(columns={"horizon": "horizon_", pass2_horizon: "horizon"})
 
 
+def compute_adjusted_min_max(derate, avg, min_, max_):
+    derate = np.fmax(np.fmin(derate, 1), 0)
+
+    max_ = np.fmax(np.fmin(derate, max_), 0)
+    min_ = np.fmax(np.fmin(min_, max_), 0)
+
+    avg = np.fmax(np.fmin(avg, 1), 0)
+
+    return derate, avg, min_, max_
+
+
 def compute_adjusted_variables(derate, avg, min_, max_):
     min_ = np.where(derate <= 1e-6, min_, np.fmin(min_/derate, 1))
     max_ = np.where(derate <= 1e-6, max_, np.fmin(max_/derate, 1))
@@ -262,7 +273,21 @@ def test_compute_adjusted_variables():
     assert pytest.approx(max_) == [0.8, 1, 1, 0.8, 0.8]
 
 
-def availability_adjustment(webdb, scenario, project, hydro_op):
+def get_timepoint_horizon_map(scenario, timepoint_map):
+    pass_name = "pass2" if "pass2" in scenario else "pass3"
+
+    timepoint_col_name = [c for c in timepoint_map.columns
+                          if c.startswith(f"{pass_name}_timepoint")][0]
+    horizon_col_name = [c for c in timepoint_map.columns
+                        if c.startswith(f"{pass_name}_horizon_")][0]
+    timepoint_horizon_map = timepoint_map[[timepoint_col_name, horizon_col_name]].drop_duplicates()
+
+    timepoint_horizon_map.rename(columns = {timepoint_col_name: "timepoint", horizon_col_name: "horizon"},
+                                 inplace = True)    
+    return timepoint_horizon_map
+
+
+def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
     # if availability inputs are not available then return avg, min_, max_ as it is
     try:
         a = read_exogenous_availabilty_results(webdb, scenario, project)
@@ -273,10 +298,10 @@ def availability_adjustment(webdb, scenario, project, hydro_op):
         df = hydro_op.reset_index()
         return df['cuf'], df['min_power_fraction'], df['max_power_fraction']
     it = read_inputs_temporal(webdb, scenario)
-    itht = read_inputs_temporal_horizon_timepoints(webdb, scenario)
+    itht = get_timepoint_horizon_map(scenario, timepoint_map)
     derate = compute_availability(a, it, itht)
     df = pd.merge(hydro_op.reset_index(), derate.reset_index())
-    return compute_adjusted_variables(df['availability_derate'],
+    return compute_adjusted_min_max(df['availability_derate'],
                                       df['cuf'],
                                       df['min_power_fraction'],
                                       df['max_power_fraction'])
@@ -328,10 +353,11 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     hydro_op['cuf'] = hydro_op['power_mw']/capacity
     weight = hydro_op.reset_index()['number_of_hours_in_timepoint']
 
-    avg, min_, max_ = availability_adjustment(
-        webdb, scenario2, project, hydro_op)
+    derate, avg, min_, max_ = availability_adjustment(
+        webdb, scenario2, project, hydro_op, timepoint_map)
     avg = adjust_mean_const(avg*weight, min_*weight, max_*weight)/weight
-    avg = adjust_mean_const(avg, min_, max_, force=True)
+    avg = adjust_mean_const(avg*weight, min_*weight, max_*weight, force=True)/weight
+    avg, min_, max_ = compute_adjusted_variables(derate, avg, min_, max_)
     results = organise_results(hydro_op, cols, avg, min_, max_)
     return results
 
