@@ -125,7 +125,7 @@ def adjust_mean_const(b, min_, max_, force=False):
     """
     def adjust(c):
         c1 = c.copy()
-        less, more, between = c < min_, c > max_, (c >= min_) & (c <= max_)
+        less, more = c < min_, c > max_
 
         if less.sum() and more.sum():
             # print("+-"*5)
@@ -133,11 +133,21 @@ def adjust_mean_const(b, min_, max_, force=False):
             c1[more] = max_[more]
         elif more.sum():
             # print("+"*5)
-            c1[between] += (c1[more] - max_[more]).sum()/between.sum()
+            can_be_increased = c < max_
+            can_be_increased_count = can_be_increased.sum()
+            if (can_be_increased_count > 0):
+                c1[can_be_increased] += (c1[more] - max_[more]).sum()/can_be_increased_count
+            else:
+                print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max limits; mean will decrease")
             c1[more] = max_[more]
         elif less.sum():
             # print("-"*5)
-            c1[between] -= (min_[less] - c1[less]).sum()/between.sum()
+            can_be_decreased = c > min_
+            can_be_decreased_count = can_be_decreased.sum()
+            if (can_be_decreased_count > 0):
+                c1[can_be_decreased] -= (min_[less] - c1[less]).sum()/can_be_decreased_count
+            else:
+                print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max; mean will increase")
             c1[less] = min_[less]
 
         # print(c.mean(), c1.mean())
@@ -146,22 +156,23 @@ def adjust_mean_const(b, min_, max_, force=False):
     c1 = adjust(b)
     # printcols(c1, min_, max_)
     n = 0
-    N = 400
+    N = 2 * len(b)
     while n < N and not np.all((c1 >= min_) & (c1 <= max_)):
         # print(f"iteration {n}..")
         c1 = adjust(c1)
         # printcols(c1, min_, max_)
         n += 1
-    if n == N:
+    print("Function adjust_mean_const, end value of counter n :", n)
+    if not np.all((c1 >= min_) & (c1 <= max_)):
         print("adjust_mean_const: Failed to converge")
         if force:
             less = c1 < min_
             more = c1 > max_
             if less.any():
-                print("Setting focibly some values to min")
+                print("Setting forcibly some values to min")
                 c1[less] = min_[less]
             if more.any():
-                print("Setting focibly some values to min")
+                print("Setting forcibly some values to max")
                 c1[more] = max_[more]
 
             print("Original average:", b.mean())
@@ -315,6 +326,23 @@ def organise_results(hydro_op, cols, avg, min_, max_):
     return results
 
 
+def get_horizon_count_dict(scenario1, scenario2, timepoint_map):
+    pass1_name = "pass1" if "pass1" in scenario1 else "pass2"
+    pass2_name = "pass2" if "pass2" in scenario2 else "pass3"
+
+    horizon1_col_name = [c for c in timepoint_map.columns
+                         if c.startswith(f"{pass1_name}_horizon_")][0]
+    horizon2_col_name = [c for c in timepoint_map.columns
+                         if c.startswith(f"{pass2_name}_horizon_")][0]
+
+    horizon1_horizon2_map = timepoint_map[[horizon1_col_name, horizon2_col_name]].drop_duplicates()
+
+    horizon1_count_df = horizon1_horizon2_map.groupby(horizon1_col_name).count()
+
+    horizon1_count_dict = horizon1_count_df.to_dict()[horizon2_col_name]
+    return horizon1_count_dict
+
+
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     """adjusting of mean happens based on 
 
@@ -355,8 +383,20 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
 
     derate, avg, min_, max_ = availability_adjustment(
         webdb, scenario2, project, hydro_op, timepoint_map)
-    avg = adjust_mean_const(avg*weight, min_*weight, max_*weight)/weight
-    avg = adjust_mean_const(avg*weight, min_*weight, max_*weight, force=True)/weight
+
+    horizon_count_dict = get_horizon_count_dict(scenario1, scenario2, timepoint_map)
+
+    prev = 0
+    for horizon, count in horizon_count_dict.items():
+        start_index = prev
+        stop_index = start_index + count
+
+        avg[start_index : stop_index] = adjust_mean_const(avg[start_index : stop_index] * weight[start_index : stop_index],
+                                                          min_[start_index : stop_index] * weight[start_index : stop_index],
+                                                          max_[start_index : stop_index] * weight[start_index : stop_index],
+                                                          force = True) / weight[start_index : stop_index]
+        prev = stop_index
+
     avg, min_, max_ = compute_adjusted_variables(derate, avg, min_, max_)
     results = organise_results(hydro_op, cols, avg, min_, max_)
     return results
