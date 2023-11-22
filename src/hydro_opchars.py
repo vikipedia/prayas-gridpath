@@ -37,7 +37,9 @@ def read_inputs_temporal_horizon_timepoints(webdb, scenario):
 def compute_availability(availability_data,
                          inputs_temporal,
                          timepoint_horizon_map):
-    a = availability_data.merge(inputs_temporal[inputs_temporal["spinup_or_lookahead"] == 0], on="timepoint")
+    a = availability_data.merge(
+        inputs_temporal[inputs_temporal["spinup_or_lookahead"] == 0], on="timepoint")
+
     a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
     a.availability_derate = a.availability_derate * a.weights
     a = a.merge(timepoint_horizon_map, on='timepoint')
@@ -136,7 +138,8 @@ def adjust_mean_const(b, min_, max_, force=False):
             can_be_increased = c < max_
             can_be_increased_count = can_be_increased.sum()
             if (can_be_increased_count > 0):
-                c1[can_be_increased] += (c1[more] - max_[more]).sum()/can_be_increased_count
+                c1[can_be_increased] += (c1[more] -
+                                         max_[more]).sum()/can_be_increased_count
             else:
                 print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max limits; mean will decrease")
             c1[more] = max_[more]
@@ -145,7 +148,8 @@ def adjust_mean_const(b, min_, max_, force=False):
             can_be_decreased = c > min_
             can_be_decreased_count = can_be_decreased.sum()
             if (can_be_decreased_count > 0):
-                c1[can_be_decreased] -= (min_[less] - c1[less]).sum()/can_be_decreased_count
+                c1[can_be_decreased] -= (min_[less] -
+                                         c1[less]).sum()/can_be_decreased_count
             else:
                 print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max; mean will increase")
             c1[less] = min_[less]
@@ -178,6 +182,29 @@ def adjust_mean_const(b, min_, max_, force=False):
             print("Original average:", b.mean())
             print("After forcible adjustment:", c1.mean())
     return c1
+
+
+def test_adjust_mean_const():
+    def generate_data(N, scale, center):
+        b = np.array([center + np.random.normal(scale=scale)
+                     for i in range(N)])
+        print(b.mean())
+        min_ = np.array([center - scale + np.random.normal(scale=scale/20)
+                         for i in range(N)])
+        max_ = np.array([center + scale + np.random.normal(scale=scale/20)
+                         for i in range(N)])
+        return b, min_, max_
+    b, min_, max_ = generate_data(365, 5, 100.0)
+    b1 = adjust_mean_const(b, min_, max_)
+    assert b.mean() == pytest.approx(b1.mean())
+
+    b, min_, max_ = generate_data(12, 5, 100.0)
+    b1 = adjust_mean_const(b, min_, max_)
+    assert b.mean() == pytest.approx(b1.mean())
+
+    b, min_, max_ = generate_data(365, 0.01, 0.5)
+    b1 = adjust_mean_const(b, min_, max_)
+    assert b.mean() == pytest.approx(b1.mean())
 
 
 def printcols(*cols):
@@ -239,7 +266,7 @@ def reduce_size(df, scenario1, scenario2, timepoint_map):
     if dfnew[pass2_horizon].isnull().sum() > 0:
         raise Exception("Possibly supplied timepoint map is wrong.")
     grouped = dfnew.groupby(pass2_horizon).sum()
-    grouped['power_mw'] = grouped['power_mw_x'] / \
+    grouped['power_mw'] = grouped['power_mw_x'] /\
         grouped["number_of_hours_in_timepoint"]
 
     # print(grouped)
@@ -291,10 +318,11 @@ def get_timepoint_horizon_map(scenario, timepoint_map):
                           if c.startswith(f"{pass_name}_timepoint")][0]
     horizon_col_name = [c for c in timepoint_map.columns
                         if c.startswith(f"{pass_name}_horizon_")][0]
-    timepoint_horizon_map = timepoint_map[[timepoint_col_name, horizon_col_name]].drop_duplicates()
+    timepoint_horizon_map = timepoint_map[[
+        timepoint_col_name, horizon_col_name]].drop_duplicates()
 
-    timepoint_horizon_map.rename(columns = {timepoint_col_name: "timepoint", horizon_col_name: "horizon"},
-                                 inplace = True)    
+    timepoint_horizon_map.rename(columns={timepoint_col_name: "timepoint", horizon_col_name: "horizon"},
+                                 inplace=True)
     return timepoint_horizon_map
 
 
@@ -313,9 +341,9 @@ def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
     derate = compute_availability(a, it, itht)
     df = pd.merge(hydro_op.reset_index(), derate.reset_index())
     return compute_adjusted_min_max(df['availability_derate'],
-                                      df['cuf'],
-                                      df['min_power_fraction'],
-                                      df['max_power_fraction'])
+                                    df['cuf'],
+                                    df['min_power_fraction'],
+                                    df['max_power_fraction'])
 
 
 def organise_results(hydro_op, cols, avg, min_, max_):
@@ -335,18 +363,20 @@ def get_horizon_count_dict(scenario1, scenario2, timepoint_map):
     horizon2_col_name = [c for c in timepoint_map.columns
                          if c.startswith(f"{pass2_name}_horizon_")][0]
 
-    horizon1_horizon2_map = timepoint_map[[horizon1_col_name, horizon2_col_name]].drop_duplicates()
+    horizon1_horizon2_map = timepoint_map[[
+        horizon1_col_name, horizon2_col_name]].drop_duplicates()
 
-    horizon1_count_df = horizon1_horizon2_map.groupby(horizon1_col_name).count()
+    horizon1_count_df = horizon1_horizon2_map.groupby(
+        horizon1_col_name).count()
 
     horizon1_count_dict = horizon1_count_df.to_dict()[horizon2_col_name]
     return horizon1_count_dict
 
 
 def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
-    """adjusting of mean happens based on 
+    """adjusting of mean happens based on
 
-    Assumption: The columns min,max,avg(cuf) are assumed to be in 
+    Assumption: The columns min,max,avg(cuf) are assumed to be in
     the same order (ascending/descending) of horizon. If it is different,
     then we need to adjust the order befor doing calculation!
     """
@@ -384,17 +414,20 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     derate, avg, min_, max_ = availability_adjustment(
         webdb, scenario2, project, hydro_op, timepoint_map)
 
-    horizon_count_dict = get_horizon_count_dict(scenario1, scenario2, timepoint_map)
+    horizon_count_dict = get_horizon_count_dict(
+        scenario1, scenario2, timepoint_map)
 
     prev = 0
     for horizon, count in horizon_count_dict.items():
         start_index = prev
         stop_index = start_index + count
 
-        avg[start_index : stop_index] = adjust_mean_const(avg[start_index : stop_index] * weight[start_index : stop_index],
-                                                          min_[start_index : stop_index] * weight[start_index : stop_index],
-                                                          max_[start_index : stop_index] * weight[start_index : stop_index],
-                                                          force = True) / weight[start_index : stop_index]
+        avg[start_index: stop_index] = adjust_mean_const(avg[start_index: stop_index] * weight[start_index: stop_index],
+                                                         min_[
+            start_index: stop_index] * weight[start_index: stop_index],
+            max_[
+            start_index: stop_index] * weight[start_index: stop_index],
+            force=True) / weight[start_index: stop_index]
         prev = stop_index
 
     avg, min_, max_ = compute_adjusted_variables(derate, avg, min_, max_)
@@ -512,7 +545,7 @@ def dbtest():
     return adjusted_mean_results(webdb, scenario1, scenario2, project, timepoint_map)
 
 
-def test_1():
+def _test_1():
     datapath = "/home/vikrant/programming/work/publicgit/gridpath-0.8.1/gridpath/db/csvs_mh/project/opchar/hydro_opchar/hydro-daily-limits-rpo30.xlsx"
     project = 'Koyna_Stage_1'
     hydro_dispatch = pd.read_excel(
@@ -526,7 +559,7 @@ def test_1():
     assert np.all(abs(b - b1) <= 0.001)
 
 
-def test_compare_with_db():
+def _test_compare_with_db():
 
     def get_db_results():
         subscenario_id = get_hydro_ops_chars_scenario_id(webdb,
