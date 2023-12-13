@@ -221,7 +221,24 @@ def get_projects(webdb, scenario):
     rows = webdb.where("inputs_project_operational_chars",
                        project_operational_chars_scenario_id=proj_ops_char_sc_id,
                        operational_type="gen_hydro")
-    return [row['project'] for row in rows]
+    p1 = set(row['project'] for row in rows)
+    p2 = set(get_portfolio_projects(webdb, scenario))
+    if p2 - p1:
+        raise Exception("Some projects from inputs_project_portfolios are\
+missing in inputs_project_operational_chars")
+    return sorted(set(p1) & set(p2))
+
+
+def get_portfolio_projects(webdb, scenario):
+    project_portfolio_scenario_id = common.get_field(webdb,
+                                                     "scenarios",
+                                                     "project_portfolio_scenario_id",
+                                                     scenario_name=scenario)
+    rows = webd.where("inputs_project_portfolios",
+                      project_portfolio_scenario_id=project_portfolio_scenario_id)
+    return (row['project'] for row in rows)
+
+    
 
 
 def match_horizons(power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario2):
