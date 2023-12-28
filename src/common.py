@@ -37,19 +37,21 @@ def filtered_table(webdb, table, **conds):
     else:
         raise NoEntriesError(f"No entries in {table} for {conds}")
 
-    
+
 def get_database(db_path):
     db = web.database("sqlite:///" + db_path)
     db.printing = False
     return db
 
 
-def get_master_csv_path(csv_location):
-    return os.path.join(csv_location, "csv_data_master.csv")
+def get_master_csv_path(csv_location, filename="csv_data_master.csv"):
+    return os.path.join(csv_location, filename)
 
 
 def get_subscenario_path(csv_location, subscenario):
     csvmasterpath = get_master_csv_path(csv_location)
+    if not os.path.exists(csvmasterpath):
+        csvmasterpath = get_master_csv_path(csv_location, "csv_structure.csv")
     csvmaster = pd.read_csv(csvmasterpath)
     row = csvmaster[csvmaster.subscenario == subscenario].iloc[0]
     return os.path.join(csv_location, row['path'])
@@ -65,13 +67,15 @@ def get_subscenario_csvpath(project,
     if csvs:
         return os.path.join(path, csvs[0])
     else:
-        print(f"CSV not found for {project}-{subscenario_id}")
-        filename = f"{project}-{subscenario_id}-{description}.csv"
-        print(f"Creating  {filename}")
-        fpath = os.path.join(path, filename)
-        with open(fpath, "w+") as f:
-            f.write("stage_id,timepoint,availability_derate")
-        return fpath
+        # TODO : This is not clean.
+        if subscenario == 'exogenous_availability_scenario_id':
+            print(f"CSV not found for {project}-{subscenario_id}")
+            filename = f"{project}-{subscenario_id}-{description}.csv"
+            print(f"Creating  {filename}")
+            fpath = os.path.join(path, filename)
+            with open(fpath, "w+") as f:
+                f.write("stage_id,timepoint,availability_derate")
+            return fpath
 
 
 def update_scenario_via_gridpath(scenario,
@@ -92,7 +96,7 @@ def update_scenario_via_gridpath(scenario,
     stdout, stderr = p.communicate("y".encode())
     print(stdout.decode())
     print(stderr.decode())
-    #out_bytes = subprocess.check_output(cmd, shell=True)
+    # out_bytes = subprocess.check_output(cmd, shell=True)
     # print(out_bytes.decode())
 
 
@@ -145,6 +149,7 @@ def update_subscenario_via_gridpath(subscenario,
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
 
+    print(cmd)
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
                          stdin=subprocess.PIPE,
@@ -153,29 +158,31 @@ def update_subscenario_via_gridpath(subscenario,
     print(stdout.decode())
     print(stderr.decode())
 
-#import logging
-#logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+# import logging
+# logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
 
 def override_dataframe(dataframe1, dataframe2, index_cols):
     """override data from dataframe2 in dataframe1 using
     index_cols as a key to compare. 
-    """
+    """        
     dx = dataframe1.to_dict(orient="records")
     dy = dataframe2.to_dict(orient="records")
     ddx = {tuple(r[c] for c in index_cols): r for r in dx}
     ddy = {tuple(r[c] for c in index_cols): r for r in dy}
-
-    ddx.update(ddy)
+    commonkeys = ddx.keys() & ddy.keys()
+    extrakeys = ddy.keys() - ddx.keys()
+    [ddx[k].update(ddy[k]) for k in commonkeys]
+    ddx.update({k: ddy[k] for k in extrakeys})
     return pd.DataFrame(ddx.values())
 
 
 def merge_in_csv(results,
                  csvpath, cols, on):
     # logging.info("Entry")
-    csvresults = results.loc[:, cols]
+    csvpartial = results.loc[:, cols]
     allcsv = pd.read_csv(csvpath)
-    df = override_dataframe(allcsv, csvresults, [on])
+    df = override_dataframe(allcsv, csvpartial, [on])
     print(f"Merging results to {csvpath}")
-    df.to_csv(csvpath, index=False, columns=cols)
+    df.to_csv(csvpath, index=False)
     # logging.info("Exit")

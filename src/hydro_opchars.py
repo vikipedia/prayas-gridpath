@@ -6,7 +6,7 @@ import os
 import click
 import availability
 import pytest
-
+import sqlite3
 
 def read_exogenous_availabilty_results(webdb, scenario, project):
     exo_avail_id = availability.get_exogenous_avail_id(
@@ -37,8 +37,9 @@ def read_inputs_temporal_horizon_timepoints(webdb, scenario):
 def compute_availability(availability_data,
                          inputs_temporal,
                          timepoint_horizon_map):
+
     a = availability_data.merge(
-        inputs_temporal[inputs_temporal["spinup_or_lookahead"] == 0], on="timepoint")
+        inputs_temporal[(inputs_temporal.spinup_or_lookahead == 0) | (inputs_temporal.spinup_or_lookahead.isna())], on="timepoint")
 
     a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
     a.availability_derate = a.availability_derate * a.weights
@@ -66,13 +67,85 @@ def hydro_op_chars_inputs_(webdb, project,
             f"Table inputs_project_hydro_operational_chars has no entries for project={project}, hydro_op_chars_scenario_id={hydro_op_chars_sid}, balancing_type_project={balancing_type_project}")
 
 
-def hydro_op_chars_inputs(webdb, scenario, project):
+def copy_cols(src, dest, srccols, destcols):
+    """copies filecols from src to dest
+    """
+    destdf = dest.copy()
+    for dest_c, src_c in zip(destcols, srccols):
+        destdf[dest_c] = src[src_c]
+    return destdf
+
+
+def get_power_fraction_cols():
+    return ['average_power_fraction',
+            'min_power_fraction',
+            'max_power_fraction']
+
+
+def get_power_fraction_file_cols():
+    cols = get_power_fraction_cols()
+    return ["_".join(["orig", c]) for c in cols]
+
+
+def swap_original_cols_from_file(dbdf,
+                                 project,
+                                 hydro_op_chars_scenario_id,
+                                 balancing_type_project,
+                                 csv_location,
+                                 description):
+    def merge_with_db(filedf, dbdf):
+        filedf = filedf.copy()
+        dbdf = dbdf.copy()
+        
+        for c in cols:
+            del dbdf[c]
+            del filedf[c]
+
+        del filedf['balancing_type_project']
+        del filedf['period']
+        dbdf = dbdf.merge(filedf, on="horizon")
+        return dbdf.rename(columns=dict(zip(filecols, cols)))
+
+    dbdf = dbdf.copy()
+    csvpath = common.get_subscenario_csvpath(project,
+                                             "hydro_operational_chars_scenario_id",
+                                             hydro_op_chars_scenario_id,
+                                             csv_location,
+                                             description)
+    if csvpath and os.path.exists(csvpath):
+        filedf = pd.read_csv(csvpath)
+    else:
+        raise Exception(f"For subscenario, hydro_operational_chars_scenario_id, {hydro_op_chars_scenario_id} file is missing")
+
+    cols = get_power_fraction_cols()
+    filecols = get_power_fraction_file_cols()
+
+    if filecols[0] in filedf.columns:
+        # columns exists
+        return merge_with_db(filedf, dbdf)
+    else:
+        # columns does not exists
+        filedf = copy_cols(filedf, filedf, cols, filecols)
+        allcols = ["balancing_type_project", "horizon", "period"]\
+            + get_power_fraction_cols()\
+            + get_power_fraction_file_cols()
+        filedf.to_csv(csvpath, index=False, columns=allcols)
+        filedf = filedf[filedf.balancing_type_project == balancing_type_project]
+        dbdf = merge_with_db(filedf, dbdf)
+    return dbdf
+
+
+def hydro_op_chars_inputs(webdb, scenario, project, csv_location, description):
     hydro_op_chars_scenario_id = get_hydro_ops_chars_scenario_id(webdb,
-                                                                 scenario, project)
+                                                                 scenario,
+                                                                 project)
     balancing_type_project = get_balancing_type(webdb, scenario)
-    return hydro_op_chars_inputs_(webdb, project,
+    dbdf = hydro_op_chars_inputs_(webdb, project,
                                   hydro_op_chars_scenario_id,
-                                  balancing_type_project)
+                                  balancing_type_project)        
+
+    dbdf = swap_original_cols_from_file(dbdf, project, hydro_op_chars_scenario_id, balancing_type_project, csv_location, description)
+    return dbdf
 
 
 def get_capacity(webdb,
@@ -112,10 +185,17 @@ def get_power_mw_dataset(webdb, scenario, project):
                                    'scenarios',
                                    "scenario_id",
                                    scenario_name=scenario)
-    rows = webdb.where("results_project_dispatch",
-                       scenario_id=scenario_id,
-                       project=project,
-                       operational_type='gen_hydro').list()
+    try:
+        rows = webdb.where("results_project_dispatch",
+                           scenario_id=scenario_id,
+                           project=project,
+                           operational_type='gen_hydro').list()
+    except sqlite3.OperationalError as oe:
+        rows = webdb.where('results_project_timepoint',
+                           scenario_id=scenario_id,
+                           project=project,
+                           operational_type='gen_hydro').list()
+    
 
     return pd.DataFrame(rows)
 
@@ -222,11 +302,8 @@ def get_projects(webdb, scenario):
                        project_operational_chars_scenario_id=proj_ops_char_sc_id,
                        operational_type="gen_hydro")
     p1 = set(row['project'] for row in rows)
-    p2 = set(get_portfolio_projects(webdb, scenario))
-    if p2 - p1:
-        raise Exception("Some projects from inputs_project_portfolios are\
-missing in inputs_project_operational_chars")
-    return sorted(set(p1) & set(p2))
+    p2 = set(get_portfolio_projects(webdb, scenario))    
+    return sorted(p1 & p2)
 
 
 def get_portfolio_projects(webdb, scenario):
@@ -234,11 +311,9 @@ def get_portfolio_projects(webdb, scenario):
                                                      "scenarios",
                                                      "project_portfolio_scenario_id",
                                                      scenario_name=scenario)
-    rows = webd.where("inputs_project_portfolios",
-                      project_portfolio_scenario_id=project_portfolio_scenario_id)
+    rows = webdb.where("inputs_project_portfolios",
+                       project_portfolio_scenario_id=project_portfolio_scenario_id)
     return (row['project'] for row in rows)
-
-    
 
 
 def match_horizons(power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario2):
@@ -352,7 +427,11 @@ def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
             f"Warning: Availabiity inputs not available for {scenario}/{project}")
         print(f"Skipping availability adjustment for {project}")
         df = hydro_op.reset_index()
-        return df['cuf'], df['min_power_fraction'], df['max_power_fraction']
+        df['availability_derate'] = 1
+        return compute_adjusted_min_max(df['availability_derate'],
+                                        df['cuf'],
+                                        df['min_power_fraction'],
+                                        df['max_power_fraction'])
     it = read_inputs_temporal(webdb, scenario)
     itht = get_timepoint_horizon_map(scenario, timepoint_map)
     derate = compute_availability(a, it, itht)
@@ -390,7 +469,13 @@ def get_horizon_count_dict(scenario1, scenario2, timepoint_map):
     return horizon1_count_dict
 
 
-def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
+def adjusted_mean_results(webdb,
+                          scenario1,
+                          scenario2,
+                          project,
+                          mapfile,
+                          csv_location,
+                          description):
     """adjusting of mean happens based on
 
     Assumption: The columns min,max,avg(cuf) are assumed to be in
@@ -399,7 +484,8 @@ def adjusted_mean_results(webdb, scenario1, scenario2, project, mapfile):
     """
     cols = ["balancing_type_project", "horizon", "period",
             "average_power_fraction", "min_power_fraction", "max_power_fraction"]
-    df0 = hydro_op_chars_inputs(webdb, scenario2, project)
+    df0 = hydro_op_chars_inputs(webdb, scenario2, project,
+                                csv_location, description)
     power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
     cuf = power_mw_df['power_mw']/capacity
@@ -473,8 +559,9 @@ def write_results_csv(results,
                       description):
     csvpath = common.get_subscenario_csvpath(project, subscenario,
                                              subscenario_id, csv_location, description)
-    cols = ["balancing_type_project", "horizon", "period",
-            "average_power_fraction", "min_power_fraction", "max_power_fraction"]
+    cols = ["balancing_type_project", "horizon", "period"]
+    cols += get_power_fraction_cols()
+
     on = 'horizon'
 
     common.merge_in_csv(results, csvpath, cols, on)
@@ -501,8 +588,13 @@ def hydro_op_chars(database,
         subscenario_id = get_hydro_ops_chars_scenario_id(
             webdb, scenario2, project_)
 
-        results = adjusted_mean_results(
-            webdb, scenario1, scenario2, project_, mapfile)
+        results = adjusted_mean_results(webdb,
+                                        scenario1,
+                                        scenario2,
+                                        project_,
+                                        mapfile,
+                                        csv_location,
+                                        description)
 
         write_results_csv(results,
                           project_,

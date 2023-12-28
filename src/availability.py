@@ -8,6 +8,7 @@ import click
 import forced_outage
 import web
 import common
+import sqlite3
 
 
 def read_availabilty_results(conn, scenario_name, project):
@@ -16,10 +17,16 @@ def read_availabilty_results(conn, scenario_name, project):
     for given scenario and project
     """
     scenario_id = get_scenario_id(conn, scenario_name)
-    r = common.filtered_table(conn,
-                              "results_project_availability_endogenous",
-                              project=project,
-                              scenario_id=scenario_id)
+    try:
+        r = common.filtered_table(conn,
+                                  "results_project_availability_endogenous",
+                                  project=project,
+                                  scenario_id=scenario_id)
+    except sqlite3.OperationalError as oe:
+        r = common.filtered_table(conn,
+                                  "results_project_timepoint",
+                                  project=project,
+                                  scenario_id=scenario_id)
     if r.shape[0] > 0:
         return r
     else:
