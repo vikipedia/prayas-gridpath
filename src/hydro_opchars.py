@@ -8,6 +8,7 @@ import availability
 import pytest
 import sqlite3
 
+
 def read_exogenous_availabilty_results(webdb, scenario, project):
     exo_avail_id = availability.get_exogenous_avail_id(
         webdb, scenario, project)
@@ -53,10 +54,15 @@ def compute_availability(availability_data,
     return derate.set_index('horizon')['availability_derate']
 
 
-def hydro_op_chars_inputs_(webdb, project,
+def hydro_op_chars_inputs_(webdb: web.db.SqliteDB, project,
                            hydro_op_chars_sid,
                            balancing_type_project):
+    othercols = ['horizon',
+                 'period',
+                 'balancing_type_project']
+    cols = ",".join(othercols + get_power_fraction_cols())
     rows = webdb.where("inputs_project_hydro_operational_chars",
+                       what=cols,
                        project=project,
                        hydro_operational_chars_scenario_id=hydro_op_chars_sid,
                        balancing_type_project=balancing_type_project).list()
@@ -96,7 +102,7 @@ def swap_original_cols_from_file(dbdf,
     def merge_with_db(filedf, dbdf):
         filedf = filedf.copy()
         dbdf = dbdf.copy()
-        
+
         for c in cols:
             del dbdf[c]
             del filedf[c]
@@ -115,7 +121,8 @@ def swap_original_cols_from_file(dbdf,
     if csvpath and os.path.exists(csvpath):
         filedf = pd.read_csv(csvpath)
     else:
-        raise Exception(f"For subscenario, hydro_operational_chars_scenario_id, {hydro_op_chars_scenario_id} file is missing")
+        raise Exception(
+            f"For subscenario, hydro_operational_chars_scenario_id, {hydro_op_chars_scenario_id} file is missing")
 
     cols = get_power_fraction_cols()
     filecols = get_power_fraction_file_cols()
@@ -130,7 +137,8 @@ def swap_original_cols_from_file(dbdf,
             + get_power_fraction_cols()\
             + get_power_fraction_file_cols()
         filedf.to_csv(csvpath, index=False, columns=allcols)
-        filedf = filedf[filedf.balancing_type_project == balancing_type_project]
+        filedf = filedf[filedf.balancing_type_project ==
+                        balancing_type_project]
         dbdf = merge_with_db(filedf, dbdf)
     return dbdf
 
@@ -142,9 +150,10 @@ def hydro_op_chars_inputs(webdb, scenario, project, csv_location, description):
     balancing_type_project = get_balancing_type(webdb, scenario)
     dbdf = hydro_op_chars_inputs_(webdb, project,
                                   hydro_op_chars_scenario_id,
-                                  balancing_type_project)        
+                                  balancing_type_project)
 
-    dbdf = swap_original_cols_from_file(dbdf, project, hydro_op_chars_scenario_id, balancing_type_project, csv_location, description)
+    dbdf = swap_original_cols_from_file(
+        dbdf, project, hydro_op_chars_scenario_id, balancing_type_project, csv_location, description)
     return dbdf
 
 
@@ -180,22 +189,28 @@ def get_balancing_type(webdb, scenario):
                             temporal_scenario_id=temporal_scenario_id)
 
 
-def get_power_mw_dataset(webdb, scenario, project):
+def get_power_mw_dataset(webdb: web.db.SqliteDB, scenario, project):
     scenario_id = common.get_field(webdb,
                                    'scenarios',
                                    "scenario_id",
                                    scenario_name=scenario)
     try:
+        cols = ",".join(['period',
+                         'timepoint',
+                         'timepoint_weight',
+                         'number_of_hours_in_timepoint',
+                         'power_mw'])
         rows = webdb.where("results_project_dispatch",
+                           what=cols,
                            scenario_id=scenario_id,
                            project=project,
                            operational_type='gen_hydro').list()
     except sqlite3.OperationalError as oe:
         rows = webdb.where('results_project_timepoint',
+                           what=cols,
                            scenario_id=scenario_id,
                            project=project,
                            operational_type='gen_hydro').list()
-    
 
     return pd.DataFrame(rows)
 
@@ -302,7 +317,7 @@ def get_projects(webdb, scenario):
                        project_operational_chars_scenario_id=proj_ops_char_sc_id,
                        operational_type="gen_hydro")
     p1 = set(row['project'] for row in rows)
-    p2 = set(get_portfolio_projects(webdb, scenario))    
+    p2 = set(get_portfolio_projects(webdb, scenario))
     return sorted(p1 & p2)
 
 
@@ -527,10 +542,10 @@ def adjusted_mean_results(webdb,
 
         avg[start_index: stop_index] = adjust_mean_const(avg[start_index: stop_index] * weight[start_index: stop_index],
                                                          min_[
-            start_index: stop_index] * weight[start_index: stop_index],
-            max_[
-            start_index: stop_index] * weight[start_index: stop_index],
-            force=True) / weight[start_index: stop_index]
+                                                             start_index: stop_index] * weight[start_index: stop_index],
+                                                         max_[
+                                                             start_index: stop_index] * weight[start_index: stop_index],
+                                                         force=True) / weight[start_index: stop_index]
         prev = stop_index
 
     avg, min_, max_ = compute_adjusted_variables(derate, avg, min_, max_)
