@@ -449,7 +449,11 @@ def endogenous_to_exogenous(scenario1: str,
                                            gridpath_repo)
         for project_ in projs:
             print(f"Starting {project_} for {scenario3} ...")
-            project_fo = fo_df[project_] if project_ in fo_df.columns else None
+            if fo:
+                project_fo = fo_df[project_] if project_ in fo_df.columns else None
+            else:
+                project_fo = None
+
             write_exogenous_via_gridpath_script(scenario1,
                                                 scenario2,
                                                 scenario3,
