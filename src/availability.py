@@ -229,7 +229,7 @@ def get_exogenous_results(scenario1, scenario2, scenario3, fo,
                                                     scenario3,
                                                     project,
                                                     mapfile)
-    if scenario3 and isinstance(fo, pd.DataFrame):
+    if scenario3 and isinstance(fo, pd.Series):
         print("Combining forced outage...")
         derate = combine_forced_outage(results, fo, project)
         results['availability_derate'] = derate
