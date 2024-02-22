@@ -7,6 +7,10 @@ import click
 import availability
 import pytest
 import sqlite3
+import logging
+from logger import init as init_logger
+
+logger = logging.getLogger(__name__)
 
 
 def read_exogenous_availabilty_results(webdb, scenario, project):
@@ -225,31 +229,33 @@ def adjust_mean_const(b, min_, max_, force=False):
         less, more = c < min_, c > max_
 
         if less.sum() and more.sum():
-            # print("+-"*5)
+            # logger.info("+-"*5)
             c1[less] += (c1[more] - max_[more]).sum()/less.sum()
             c1[more] = max_[more]
         elif more.sum():
-            # print("+"*5)
+            # logger.info("+"*5)
             can_be_increased = c < max_
             can_be_increased_count = can_be_increased.sum()
             if (can_be_increased_count > 0):
                 c1[can_be_increased] += (c1[more] -
                                          max_[more]).sum()/can_be_increased_count
             else:
-                print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max limits; mean will decrease")
+                logger.warn(
+                    "Input data is such that its mean cannot be maintained, while adjusting between min and max limits; mean will decrease")
             c1[more] = max_[more]
         elif less.sum():
-            # print("-"*5)
+            # logger.info("-"*5)
             can_be_decreased = c > min_
             can_be_decreased_count = can_be_decreased.sum()
             if (can_be_decreased_count > 0):
                 c1[can_be_decreased] -= (min_[less] -
                                          c1[less]).sum()/can_be_decreased_count
             else:
-                print("Warning: Input data is such that its mean cannot be maintained, while adjusting between min and max; mean will increase")
+                logger.warn(
+                    "Input data is such that its mean cannot be maintained, while adjusting between min and max; mean will increase")
             c1[less] = min_[less]
 
-        # print(c.mean(), c1.mean())
+        # logger.info(c.mean(), c1.mean())
         return c1
 
     c1 = adjust(b)
@@ -257,25 +263,25 @@ def adjust_mean_const(b, min_, max_, force=False):
     n = 0
     N = 2 * len(b)
     while n < N and not np.all((c1 >= min_) & (c1 <= max_)):
-        # print(f"iteration {n}..")
+        # logger.info(f"iteration {n}..")
         c1 = adjust(c1)
         # printcols(c1, min_, max_)
         n += 1
-    print("Function adjust_mean_const, end value of counter n :", n)
+    logger.info(f"Function adjust_mean_const, end value of counter n : {n}")
     if not np.all((c1 >= min_) & (c1 <= max_)):
-        print("adjust_mean_const: Failed to converge")
+        logger.info("adjust_mean_const: Failed to converge")
         if force:
             less = c1 < min_
             more = c1 > max_
             if less.any():
-                print("Setting forcibly some values to min")
+                logger.info("Setting forcibly some values to min")
                 c1[less] = min_[less]
             if more.any():
-                print("Setting forcibly some values to max")
+                logger.info("Setting forcibly some values to max")
                 c1[more] = max_[more]
 
-            print("Original average:", b.mean())
-            print("After forcible adjustment:", c1.mean())
+            logger.info("Original average: {}".format(b.mean()))
+            logger.info("After forcible adjustment: {}".format(c1.mean()))
     return c1
 
 
@@ -283,7 +289,7 @@ def test_adjust_mean_const():
     def generate_data(N, scale, center):
         b = np.array([center + np.random.normal(scale=scale)
                      for i in range(N)])
-        print(b.mean())
+        logger.info(str(b.mean()))
         min_ = np.array([center - scale + np.random.normal(scale=scale/20)
                          for i in range(N)])
         max_ = np.array([center + scale + np.random.normal(scale=scale/20)
@@ -304,7 +310,7 @@ def test_adjust_mean_const():
 
 def printcols(*cols):
     for i, args in enumerate(zip(*cols)):
-        print(f"{i:3d}", " ".join([f"{arg:.8f}" for arg in args]))
+        logger.info(f"{i:3d}" + " " + " ".join([f"{arg:.8f}" for arg in args]))
 
 
 def get_projects(webdb, scenario):
@@ -376,7 +382,7 @@ def reduce_size(df, scenario1, scenario2, timepoint_map):
     grouped['power_mw'] = grouped['power_mw_x'] /\
         grouped["number_of_hours_in_timepoint"]
 
-    # print(grouped)
+    # logger.info(grouped)
     return grouped.reset_index().rename(columns={"horizon": "horizon_", pass2_horizon: "horizon"})
 
 
@@ -438,9 +444,9 @@ def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
     try:
         a = read_exogenous_availabilty_results(webdb, scenario, project)
     except common.NoEntriesError as e:
-        print(
-            f"Warning: Availabiity inputs not available for {scenario}/{project}")
-        print(f"Skipping availability adjustment for {project}")
+        logger.warn(
+            f"Availabiity inputs not available for {scenario}/{project}")
+        logger.warn(f"Skipping availability adjustment for {project}")
         df = hydro_op.reset_index()
         df['availability_derate'] = 1
         return compute_adjusted_min_max(df['availability_derate'],
@@ -599,7 +605,7 @@ def hydro_op_chars(database,
 
     subscenario = "hydro_operational_chars_scenario_id"
     for project_ in projects:
-        print(f"Computing data for {project_}")
+        logger.info(f"Computing data for {project_}")
         subscenario_id = get_hydro_ops_chars_scenario_id(
             webdb, scenario2, project_)
 
@@ -636,6 +642,7 @@ def hydro_op_chars(database,
 @click.option("--project", default=None, help="Run for only one project")
 @click.option("-t", "--timepoint_map", default="timepoint_map.xlsx", help="Excel file of timepoint map")
 @click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
+@click.option("-l", "--loglevel", default="INFO", help="Loglevel one of INFO,WARN,DEBUG,ERROR")
 def main(database,
          csv_location,
          gridpath_repo,
@@ -644,8 +651,13 @@ def main(database,
          description,
          project,
          timepoint_map,
-         update_database
+         update_database,
+         loglevel
          ):
+    global logger
+
+    init_logger("hydro.log", loglevel)
+    logger = logging.getLogger("hydro_opchars")
 
     hydro_op_chars(database,
                    csv_location,

@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import os
 import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class NoEntriesError(Exception):
@@ -15,7 +18,8 @@ def get_field(webdb, table, field, **conds):
     if not r or field not in r:
         raise NoEntriesError(f"Field {field} not found in {table} for {conds}")
     if not r[field]:
-        print(f"Warning: {field} from {table} for {conds} is empty or None")
+        logger.warn(
+            f"{field} from {table} for {conds} is empty or None")
     return r[field]
 
 
@@ -69,9 +73,9 @@ def get_subscenario_csvpath(project,
     else:
         # TODO : This is not clean.
         if subscenario == 'exogenous_availability_scenario_id':
-            print(f"CSV not found for {project}-{subscenario_id}")
+            logger.info(f"CSV not found for {project}-{subscenario_id}")
             filename = f"{project}-{subscenario_id}-{description}.csv"
-            print(f"Creating  {filename}")
+            logger.info(f"Creating  {filename}")
             fpath = os.path.join(path, filename)
             with open(fpath, "w+") as f:
                 f.write("stage_id,timepoint,availability_derate")
@@ -88,16 +92,18 @@ def update_scenario_via_gridpath(scenario,
         f"--scenario {scenario}"
 
     cmd = " ".join(["python", script, args])
-    print(cmd)
+    logger.info(cmd)
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
                          stdin=subprocess.PIPE,
                          stderr=subprocess.PIPE)
     stdout, stderr = p.communicate("y".encode())
-    print(stdout.decode())
-    print(stderr.decode())
+    logger.info(stdout.decode())
+    e = stderr.decode().strip()
+    if e:
+        logger.error(e)
     # out_bytes = subprocess.check_output(cmd, shell=True)
-    # print(out_bytes.decode())
+    # logger.info(out_bytes.decode())
 
 
 def run_scenario(scenario,
@@ -106,12 +112,12 @@ def run_scenario(scenario,
     cmd = "gridpath_run_e2e --scenario %s --database %s --log --scenario_location %s" % (
         scenario, db_path, scenario_location)
 
-    print(cmd)
+    logger.info(cmd)
 
     # - "check_output" needs zero output
 
     completed_process = subprocess.run(cmd, shell=True)
-    print(completed_process.returncode)
+    logger.info(completed_process.returncode)
 
     conn = get_database(db_path)
     table = get_table_dataframe(conn, "scenarios")
@@ -149,14 +155,16 @@ def update_subscenario_via_gridpath(subscenario,
     cmd = create_command(subscenario, subscenario_id, project,
                          csv_location, db_path, gridpath_rep)
 
-    print(cmd)
+    logger.info(cmd)
     p = subprocess.Popen(cmd, shell=True,
                          stdout=subprocess.PIPE,
                          stdin=subprocess.PIPE,
                          stderr=subprocess.PIPE)
     stdout, stderr = p.communicate("y".encode())
-    print(stdout.decode())
-    print(stderr.decode())
+    logger.info(stdout.decode())
+    e = stderr.decode().strip()
+    if e:
+        logger.error(e)
 
 # import logging
 # logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
@@ -165,7 +173,7 @@ def update_subscenario_via_gridpath(subscenario,
 def override_dataframe(dataframe1, dataframe2, index_cols):
     """override data from dataframe2 in dataframe1 using
     index_cols as a key to compare. 
-    """        
+    """
     dx = dataframe1.to_dict(orient="records")
     dy = dataframe2.to_dict(orient="records")
     ddx = {tuple(r[c] for c in index_cols): r for r in dx}
@@ -183,6 +191,6 @@ def merge_in_csv(results,
     csvpartial = results.loc[:, cols]
     allcsv = pd.read_csv(csvpath)
     df = override_dataframe(allcsv, csvpartial, [on])
-    print(f"Merging results to {csvpath}")
+    logger.info(f"Merging results to {csvpath}")
     df.to_csv(csvpath, index=False)
     # logging.info("Exit")

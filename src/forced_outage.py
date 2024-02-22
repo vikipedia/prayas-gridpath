@@ -148,11 +148,11 @@ def split_and_move(t, locations, f_, ms, fs):
 
 
 def moveall(targets, locations, f_, ms, fs):
-    #print("Targets->", targets)
+    # print("Targets->", targets)
     f = f_.copy()
     used = {}
     for t in sorted(targets, key=len_, reverse=True):  # start with biggest
-        #print("Possible swaps->", locations)
+        # print("Possible swaps->", locations)
         locations_ = sorted([l for l in locations if lendiff(l, t) >= 0],
                             key=lambda x: abs(distance(x, t)))
         if not locations_:
