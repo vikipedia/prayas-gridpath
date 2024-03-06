@@ -23,6 +23,13 @@ def read_exogenous_availabilty_results(webdb, scenario, project):
                                  exogenous_availability_scenario_id=exo_avail_id)
 
 
+def get_period(webdb, scenario):
+    temporal_scenario_id = availability.get_temporal_scenario_id(
+        webdb, scenario)
+    return common.get_field(webdb, 'inputs_temporal_periods', 'period',
+                            temporal_scenario_id=temporal_scenario_id)
+
+
 def read_inputs_temporal(webdb, scenario):
     temporal_scenario_id = availability.get_temporal_scenario_id(
         webdb, scenario)
@@ -166,9 +173,11 @@ def get_capacity(webdb,
                  project):
     capacity_scenario_id = get_project_specified_capacity_scenario_id(webdb,
                                                                       scenario)
+    period = get_period(webdb, scenario)
     return common.get_field(webdb, "inputs_project_specified_capacity",
                             "specified_capacity_mw",
                             project=project,
+                            period=period,
                             project_specified_capacity_scenario_id=capacity_scenario_id)
 
 
@@ -240,7 +249,7 @@ def adjust_mean_const(b, min_, max_, force=False):
                 c1[can_be_increased] += (c1[more] -
                                          max_[more]).sum()/can_be_increased_count
             else:
-                logger.warn(
+                logger.warning(
                     "Input data is such that its mean cannot be maintained, while adjusting between min and max limits; mean will decrease")
             c1[more] = max_[more]
         elif less.sum():
@@ -251,7 +260,7 @@ def adjust_mean_const(b, min_, max_, force=False):
                 c1[can_be_decreased] -= (min_[less] -
                                          c1[less]).sum()/can_be_decreased_count
             else:
-                logger.warn(
+                logger.warning(
                     "Input data is such that its mean cannot be maintained, while adjusting between min and max; mean will increase")
             c1[less] = min_[less]
 
@@ -444,9 +453,9 @@ def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
     try:
         a = read_exogenous_availabilty_results(webdb, scenario, project)
     except common.NoEntriesError as e:
-        logger.warn(
+        logger.warning(
             f"Availabiity inputs not available for {scenario}/{project}")
-        logger.warn(f"Skipping availability adjustment for {project}")
+        logger.warning(f"Skipping availability adjustment for {project}")
         df = hydro_op.reset_index()
         df['availability_derate'] = 1
         return compute_adjusted_min_max(df['availability_derate'],
@@ -509,6 +518,8 @@ def adjusted_mean_results(webdb,
                                 csv_location, description)
     power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
+    if abs(capacity) <= 1e-8:
+        raise Exception("Capacity is zero or very small!")
     cuf = power_mw_df['power_mw']/capacity
     weight = power_mw_df['number_of_hours_in_timepoint']
     prd = power_mw_df['period'].unique()[0]

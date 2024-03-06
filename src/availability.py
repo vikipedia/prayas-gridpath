@@ -42,10 +42,10 @@ def read_availabilty_results(conn, scenario_name, project):
 def availability_precision_correction(availability, decimals=1):
     r = availability
     if (r.availability_derate < 0).sum() < 0:
-        logger.warn(
+        logger.warning(
             "Some values of availability_derate were negative, focefully setting them to 0")
     if (r.availability_derate > 1).sum() > 1:
-        logger.warn(
+        logger.warning(
             "Some values of availability_derate were more than 1, focefully setting them to 1")
     r['availability_derate'] = np.where(r.availability_derate < 0,
                                         0,
@@ -175,7 +175,7 @@ def get_exogenous_results_(conn,
                                    timepoint_map,
                                    pass1_results)
     g = r.reset_index().groupby(target_timepoints)
-    gsum = g.sum()
+    gsum = g.sum(numeric_only=True)
     derate = gsum['availability_derate']/gsum['weight']
     derate = derate.reset_index().rename(
         columns={target_timepoints: 'timepoint', 0: "availability_derate"})
@@ -352,7 +352,7 @@ def find_projects_to_copy(scenario1, scenario2, db_path):
     projects2 = find_projects(scenario2, "exogenous", webdb)
 
     if projects1 - projects2:
-        logger.warn(f"Some binary projects from {scenario1} are not listed\
+        logger.warning(f"Some binary projects from {scenario1} are not listed\
  in exogenous projects of {scenario2}")
     return sorted(projects1 & projects2)
 
@@ -519,7 +519,7 @@ def main(scenario1: str,
          loglevel: str):
     global logger
     init_logger("availability.log", loglevel)
-    logger = logging.getLogger("rumi.processing.demand")
+    logger = logging.getLogger("availability")
 
     return endogenous_to_exogenous(
         scenario1,
