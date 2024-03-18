@@ -14,7 +14,7 @@ def get_log_filepath(prefix):
     location = os.getcwd()
     format_ = "%Y-%m-%d-%H-%M-%S"
     timestamp = datetime.datetime.now().strftime(format_)
-    return os.path.join(location, ".".join(["rumi", prefix, timestamp, "log"]))
+    return os.path.join(location, ".".join([prefix, timestamp, "log"]))
 
 
 def init(prefix, levelname="INFO"):

@@ -202,7 +202,7 @@ def get_balancing_type(webdb, scenario):
                             temporal_scenario_id=temporal_scenario_id)
 
 
-def get_power_mw_dataset(webdb: web.db.SqliteDB, scenario, project):
+def get_gross_power_mw_dataset(webdb: web.db.SqliteDB, scenario, project):
     scenario_id = common.get_field(webdb,
                                    'scenarios',
                                    "scenario_id",
@@ -212,7 +212,7 @@ def get_power_mw_dataset(webdb: web.db.SqliteDB, scenario, project):
                          'timepoint',
                          'timepoint_weight',
                          'number_of_hours_in_timepoint',
-                         'power_mw'])
+                         'gross_power_mw'])
         rows = webdb.where("results_project_dispatch",
                            what=cols,
                            scenario_id=scenario_id,
@@ -346,7 +346,7 @@ def get_portfolio_projects(webdb, scenario):
     return (row['project'] for row in rows)
 
 
-def match_horizons(power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario2):
+def match_horizons(gross_power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario2):
     pass1_name = "pass1" if "pass1" in scenario1 else "pass2"
     pass1 = [c for c in timepoint_map.columns if c.startswith(
         f"{pass1_name}_timepoint")][0]
@@ -356,9 +356,9 @@ def match_horizons(power_mw_df, hydro_opchar, timepoint_map, scenario1, scenario
     pass2_horizon = [
         c for c in timepoint_map.columns if c.startswith(f"{pass_name}_horizon_")][0]
 
-    cols = [c for c in power_mw_df.columns]
+    cols = [c for c in gross_power_mw_df.columns]
     rsuffix = "_other"
-    dfnew = power_mw_df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
+    dfnew = gross_power_mw_df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
     if dfnew[pass2_horizon].isnull().sum() > 0:
         raise Exception("Possibly supplied timepoint map is wrong.")
 
@@ -383,12 +383,12 @@ def reduce_size(df, scenario1, scenario2, timepoint_map):
     dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
 
     weight = dfnew["number_of_hours_in_timepoint"]
-    dfnew['power_mw_x'] = dfnew['power_mw'] * weight
+    dfnew['gross_power_mw_x'] = dfnew['gross_power_mw'] * weight
     dfnew = dfnew.reset_index()
     if dfnew[pass2_horizon].isnull().sum() > 0:
         raise Exception("Possibly supplied timepoint map is wrong.")
     grouped = dfnew.groupby(pass2_horizon).sum()
-    grouped['power_mw'] = grouped['power_mw_x'] /\
+    grouped['gross_power_mw'] = grouped['gross_power_mw_x'] /\
         grouped["number_of_hours_in_timepoint"]
 
     # logger.info(grouped)
@@ -516,13 +516,13 @@ def adjusted_mean_results(webdb,
             "average_power_fraction", "min_power_fraction", "max_power_fraction"]
     df0 = hydro_op_chars_inputs(webdb, scenario2, project,
                                 csv_location, description)
-    power_mw_df = get_power_mw_dataset(webdb, scenario1, project)
+    gross_power_mw_df = get_gross_power_mw_dataset(webdb, scenario1, project)
     capacity = get_capacity(webdb, scenario1, project)
     if abs(capacity) <= 1e-8:
         raise Exception("Capacity is zero or very small!")
-    cuf = power_mw_df['power_mw']/capacity
-    weight = power_mw_df['number_of_hours_in_timepoint']
-    prd = power_mw_df['period'].unique()[0]
+    cuf = gross_power_mw_df['gross_power_mw']/capacity
+    weight = gross_power_mw_df['number_of_hours_in_timepoint']
+    prd = gross_power_mw_df['period'].unique()[0]
     hydro_op = df0[df0.period == prd].reset_index(
         drop=True).set_index("horizon")
     min_, max_ = [hydro_op[c] for c in cols[-2:]]
@@ -532,18 +532,18 @@ def adjusted_mean_results(webdb,
                                   engine="openpyxl")
 
     if len(cuf) > len(min_):
-        power_mw_df = reduce_size(
-            power_mw_df, scenario1, scenario2, timepoint_map)
-        power_mw_df = power_mw_df.set_index("horizon")
-        hydro_op = hydro_op.join(power_mw_df, rsuffix="right")
+        gross_power_mw_df = reduce_size(
+            gross_power_mw_df, scenario1, scenario2, timepoint_map)
+        gross_power_mw_df = gross_power_mw_df.set_index("horizon")
+        hydro_op = hydro_op.join(gross_power_mw_df, rsuffix="right")
     elif len(cuf) < len(min_):
-        Exception("power_mw needs to expand in size. Code does not handle it!")
+        Exception("gross_power_mw needs to expand in size. Code does not handle it!")
     else:
         hydro_op = match_horizons(
-            power_mw_df, hydro_op, timepoint_map, scenario1, scenario2)
+            gross_power_mw_df, hydro_op, timepoint_map, scenario1, scenario2)
 
     min_, max_ = [hydro_op[c] for c in cols[-2:]]
-    hydro_op['cuf'] = hydro_op['power_mw']/capacity
+    hydro_op['cuf'] = hydro_op['gross_power_mw']/capacity
     weight = hydro_op.reset_index()['number_of_hours_in_timepoint']
 
     derate, avg, min_, max_ = availability_adjustment(
