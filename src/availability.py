@@ -22,21 +22,35 @@ def read_availabilty_results(conn, scenario_name, project):
     for given scenario and project
     """
     scenario_id = get_scenario_id(conn, scenario_name)
-    try:
+    try:  # inputs_project_availability_exogenous
         r = common.filtered_table(conn,
                                   "results_project_availability_endogenous",
                                   project=project,
                                   scenario_id=scenario_id)
+        logger.info(
+            f"read data from results_project_availability_endogenous for {scenario_name}")
     except sqlite3.OperationalError as oe:
         r = common.filtered_table(conn,
                                   "results_project_timepoint",
                                   project=project,
                                   scenario_id=scenario_id)
+        logger.info(
+            f"read data from results_project_timepoint for {scenario_name}")
     if r.shape[0] > 0:
         return r
     else:
-        raise common.NoEntriesError(
-            f"Availability results for {project} and {scenario_name} are not there in table results_project_availability_endogenous")
+        exo_id = get_exogenous_avail_id(conn, scenario_name, project)
+        r = common.filtered_table(conn,
+                                  "inputs_project_availability_exogenous",
+                                  project=project,
+                                  exogenous_availability_scenario_id=exo_id)
+        logger.info(
+            f"read data from inputs_project_availability_exogenous for {scenario_name}")
+        if r.shape[0] > 0:
+            return r
+        else:
+            raise common.NoEntriesError(
+                f"Availability results for {project} and {scenario_name} are neither available in table results_project_timepoint/results_project_availability_endogenous nor in inputs_project_availability_exogenous ")
 
 
 def availability_precision_correction(availability, decimals=1):
@@ -69,7 +83,7 @@ def get_exogenous_avail_id(conn, scenario, project):
                             "inputs_project_availability",
                             "exogenous_availability_scenario_id",
                             project_availability_scenario_id=proj_avail_id,
-                            project=project),
+                            project=project)
 
 
 @functools.lru_cache(maxsize=None)
@@ -325,21 +339,36 @@ def write_exogenous_via_gridpath_script(scenario1,
                                                gridpath_repo)
 
 
-def find_projects(scenario1, type_, webdb):
+def get_type(project, scenario, webdb):
+    availability_id1 = common.get_field(webdb,
+                                        "scenarios",
+                                        "project_availability_scenario_id",
+                                        scenario_name=scenario)
+    return common.get_field(webdb,
+                            "inputs_project_availability",
+                            "availability_type",
+                            project_availability_scenario_id=availability_id1,
+                            project=project)
+
+
+def find_projects(scenario1, type_=None, webdb=None):
     availability_id1 = common.get_field(webdb,
                                         "scenarios",
                                         "project_availability_scenario_id",
                                         scenario_name=scenario1)
-
+    
     portfolio_id = common.get_field(webdb,
                                     "scenarios",
                                     "project_portfolio_scenario_id",
                                     scenario_name=scenario1)
+    
+    params = {"project_availability_scenario_id": availability_id1}
+
+    if type_:
+        params["availability_type"] = type_
 
     rows = webdb.where("inputs_project_availability",
-                       project_availability_scenario_id=availability_id1,
-                       availability_type=type_).list()
-
+                       **params).list()
     portfolio_rows = webdb.where("inputs_project_portfolios",
                                  project_portfolio_scenario_id=portfolio_id).list()
 
@@ -348,8 +377,13 @@ def find_projects(scenario1, type_, webdb):
 
 def find_projects_to_copy(scenario1, scenario2, db_path):
     webdb = common.get_database(db_path)
-    projects1 = find_projects(scenario1, "binary", webdb)
-    projects2 = find_projects(scenario2, "exogenous", webdb)
+    projects1 = set(p for p in find_projects(
+        scenario1, webdb=webdb) if not (get_type(p, scenario1, webdb) == "exogenous" and get_exogenous_avail_id(webdb, scenario1, p) is None))
+    # for scenario 1
+    # filter out projects that are exogenous and do not have exo_sc_id provided
+
+    #projects2 = find_projects(scenario2, "exogenous", webdb)
+    projects2 = set(p for p in find_projects(scenario2, "exogenous", webdb) if get_exogenous_avail_id(webdb, scenario2, p) is not None)
 
     if projects1 - projects2:
         logger.warning(f"Some binary projects from {scenario1} are not listed\
@@ -404,6 +438,7 @@ def handle_exogenous_only_projects(scenario1,
 {scenario3}")
             del df_ava['availability_derate']
             derate = fo_df[prj].copy()
+            print(fo_df[prj])
             derate.name = 'availability_derate'
             df_ava = df_ava.join(derate)
             df_ava['project'] = prj
@@ -457,7 +492,8 @@ def endogenous_to_exogenous(scenario1: str,
 
     if scenario3:
         # TODO: No need to do this since it is done outside the loop?
-        projs = find_projects_to_copy(scenario1, scenario3, database)
+        projs = find_projects_to_copy(
+            scenario1, scenario3, database)  # this will change
 
         if fo:
             logger.info("Reading forced outage csv")
