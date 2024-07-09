@@ -358,7 +358,8 @@ def match_horizons(gross_power_mw_df, hydro_opchar, timepoint_map, scenario1, sc
 
     cols = [c for c in gross_power_mw_df.columns]
     rsuffix = "_other"
-    dfnew = gross_power_mw_df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
+    dfnew = gross_power_mw_df.set_index(
+        "timepoint").join(t_map, rsuffix=rsuffix)
     if dfnew[pass2_horizon].isnull().sum() > 0:
         raise Exception("Possibly supplied timepoint map is wrong.")
 
@@ -537,7 +538,8 @@ def adjusted_mean_results(webdb,
         gross_power_mw_df = gross_power_mw_df.set_index("horizon")
         hydro_op = hydro_op.join(gross_power_mw_df, rsuffix="right")
     elif len(cuf) < len(min_):
-        Exception("gross_power_mw needs to expand in size. Code does not handle it!")
+        Exception(
+            "gross_power_mw needs to expand in size. Code does not handle it!")
     else:
         hydro_op = match_horizons(
             gross_power_mw_df, hydro_op, timepoint_map, scenario1, scenario2)

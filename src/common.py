@@ -17,9 +17,6 @@ def get_field(webdb, table, field, **conds):
 
     if not r or field not in r:
         raise NoEntriesError(f"Field {field} not found in {table} for {conds}")
-    if not r[field]:
-        logger.warn(
-            f"{field} from {table} for {conds} is empty or None")
     return r[field]
 
 
