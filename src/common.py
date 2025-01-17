@@ -69,13 +69,14 @@ def get_subscenario_csvpath(project,
         return os.path.join(path, csvs[0])
     else:
         # TODO : This is not clean.
-        if subscenario == 'exogenous_availability_scenario_id':
+        if subscenario == 'exogenous_availability_independent_scenario_id':
             logger.info(f"CSV not found for {project}-{subscenario_id}")
             filename = f"{project}-{subscenario_id}-{description}.csv"
             logger.info(f"Creating  {filename}")
             fpath = os.path.join(path, filename)
             with open(fpath, "w+") as f:
-                f.write("stage_id,timepoint,availability_derate")
+                f.write(
+                    "availability_iteration,stage_id,timepoint,availability_derate_independent, hyb_stor_cap_availability_derate_independent")
             return fpath
 
 
