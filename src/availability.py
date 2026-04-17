@@ -43,7 +43,7 @@ def read_availabilty_results(conn, scenario_name, project):
         r = common.filtered_table(conn,
                                   "inputs_project_availability_exogenous",
                                   project=project,
-                                  exogenous_availability_scenario_id=exo_id)
+                                  exogenous_availability_independent_scenario_id=exo_id)
         logger.info(
             f"read data from inputs_project_availability_exogenous for {scenario_name}")
         if r.shape[0] > 0:
@@ -81,7 +81,7 @@ def get_exogenous_avail_id(conn, scenario, project):
                                      scenario_name=scenario)
     return common.get_field(conn,
                             "inputs_project_availability",
-                            "exogenous_availability_scenario_id",
+                            "exogenous_availability_independent_scenario_id",
                             project_availability_scenario_id=proj_avail_id,
                             project=project)
 
@@ -140,15 +140,17 @@ def get_generic_col(size, dtype, value):
 def create_table_for_results(availability_derate,
                              project,
                              exo_id_value,
-                             stage_id):
+                             stage_id,
+                             availability_iteration):
     size = len(availability_derate)
     project_ = get_generic_col(size, object, project)
     exo_id = get_generic_col(size, int, exo_id_value)
     r = availability_derate
     r['project'] = project
-    r['exogenous_availability_scenario_id'] = exo_id
+    r['exogenous_availability_independent_scenario_id'] = exo_id
     r['stage_id'] = stage_id.reset_index()['stage_id']
     r['hyb_stor_cap_availability_derate'] = None
+    r['availability_iteration'] = availability_iteration
     return r
 
 
@@ -161,7 +163,7 @@ def get_exogenous_results_(conn,
     pass1_results = read_availabilty_results(conn, scenario1, project)
     pass1_results = availability_precision_correction(pass1_results)
     colnames = ["project",
-                "exogenous_availability_scenario_id",
+                "exogenous_availability_independent_scenario_id",
                 "stage_id",
                 "timepoint",
                 "availability_derate",
@@ -189,16 +191,18 @@ def get_exogenous_results_(conn,
                                    timepoint_map,
                                    pass1_results)
     g = r.reset_index().groupby(target_timepoints)
-    gsum = g.sum(numeric_only=True)
+    gsum = g[['availability_derate', 'weight']].sum()
     derate = gsum['availability_derate']/gsum['weight']
     derate = derate.reset_index().rename(
         columns={target_timepoints: 'timepoint', 0: "availability_derate"})
-    stage_id = g.first()
+    gfirst = g[['stage_id', 'availability_iteration']
+               ].first().reset_index(drop=True)
 
     r = create_table_for_results(derate,
                                  project,
                                  exo_id_value,
-                                 stage_id)
+                                 gfirst['stage_id'],
+                                 gfirst['availability_iteration'])
 
     return r, pass1_results
 
@@ -262,8 +266,8 @@ def combine_fo(results, fo):
     results = results_.reset_index()
 
     if results.fo.isnull().sum() != 0:
-        logger.error("Timepoint in forced ouage is incorrect")
-        raise Exception("Timepoint in forced ouage is incorrect")
+        logger.error("Timepoint in forced outage is incorrect")
+        raise Exception("Timepoint in forced outage is incorrect")
     m = results['availability_derate'].copy()
     f = results['fo']
     del results['fo']
@@ -274,8 +278,10 @@ def combine_fo(results, fo):
 
 def merge_in_csv(results,
                  csvpath):
-    cols = ['stage_id', 'timepoint', 'availability_derate',
-            'hyb_stor_cap_availability_derate']
+    results = results.rename(columns={'availability_derate': 'availability_derate_independent',
+                                      'hyb_stor_cap_availability_derate': 'hyb_stor_cap_availability_derate_independent'})
+    cols = ['availability_iteration', 'stage_id', 'timepoint', 'availability_derate_independent',
+            'hyb_stor_cap_availability_derate_independent']
     on = 'timepoint'
     common.merge_in_csv(results, csvpath, cols, on)
 
@@ -284,7 +290,7 @@ def write_exogenous_results_csv(results,
                                 project,
                                 csv_location,
                                 description):
-    subscenario = 'exogenous_availability_scenario_id'
+    subscenario = 'exogenous_availability_independent_scenario_id'
     subscenario_id = results.iloc[0][subscenario]
     csvpath = common.get_subscenario_csvpath(project, subscenario,
                                              subscenario_id, csv_location,
@@ -356,12 +362,12 @@ def find_projects(scenario1, type_=None, webdb=None):
                                         "scenarios",
                                         "project_availability_scenario_id",
                                         scenario_name=scenario1)
-    
+
     portfolio_id = common.get_field(webdb,
                                     "scenarios",
                                     "project_portfolio_scenario_id",
                                     scenario_name=scenario1)
-    
+
     params = {"project_availability_scenario_id": availability_id1}
 
     if type_:
@@ -382,8 +388,9 @@ def find_projects_to_copy(scenario1, scenario2, db_path):
     # for scenario 1
     # filter out projects that are exogenous and do not have exo_sc_id provided
 
-    #projects2 = find_projects(scenario2, "exogenous", webdb)
-    projects2 = set(p for p in find_projects(scenario2, "exogenous", webdb) if get_exogenous_avail_id(webdb, scenario2, p) is not None)
+    # projects2 = find_projects(scenario2, "exogenous", webdb)
+    projects2 = set(p for p in find_projects(scenario2, "exogenous", webdb)
+                    if get_exogenous_avail_id(webdb, scenario2, p) is not None)
 
     if projects1 - projects2:
         logger.warning(f"Some binary projects from {scenario1} are not listed\
@@ -402,14 +409,14 @@ def handle_exogenous_only_projects(scenario1,
                                    csv_location,
                                    name,
                                    gridpath_repo):
-    """Handles projects which have valid exogenous_availability_scenario_id
+    """Handles projects which have valid exogenous_availability_independent_scenario_id
     but do not have data to be copied from previous scenario
     """
     conn = common.get_database(database)
     table = common.get_table_dataframe(
         conn, "inputs_project_availability")
 
-    table.dropna(subset=['exogenous_availability_scenario_id'],
+    table.dropna(subset=['exogenous_availability_independent_scenario_id'],
                  inplace=True)
 
     table_scenario = common.get_table_dataframe(conn, "scenarios")
@@ -438,7 +445,6 @@ def handle_exogenous_only_projects(scenario1,
 {scenario3}")
             del df_ava['availability_derate']
             derate = fo_df[prj].copy()
-            print(fo_df[prj])
             derate.name = 'availability_derate'
             df_ava = df_ava.join(derate)
             df_ava['project'] = prj
@@ -454,7 +460,7 @@ def handle_exogenous_only_projects(scenario1,
                                                        gridpath_repo)
         else:
             logger.warning(
-                f"{prj} has valid exogenous_availability_scenario_id but no forced outage is given for the project")
+                f"{prj} has valid exogenous_availability_independent_scenario_id but no forced outage is given for the project")
 
 
 def endogenous_to_exogenous(scenario1: str,
@@ -465,7 +471,7 @@ def endogenous_to_exogenous(scenario1: str,
                             database: str,
                             mapfile: str,
                             gridpath_repo: str,
-                            skip_scenario2: bool,
+                            copy_scenario2: bool,
                             project: str,
                             name: str,
                             update_database: bool):
@@ -475,7 +481,7 @@ def endogenous_to_exogenous(scenario1: str,
     if project:
         projs = [project]
 
-    if not skip_scenario2:
+    if copy_scenario2:
         for project_ in projs:
             logger.info(f"Starting {project_} for {scenario2} ...")
             write_exogenous_via_gridpath_script(scenario1,
@@ -535,10 +541,10 @@ def endogenous_to_exogenous(scenario1: str,
 @click.option("-s2", "--scenario2", default="pass2", help="Name of scenario2 (default: pass2)")
 @click.option("-s3", "--scenario3", default=None, help="Name of scenario3 (default: None)")
 @click.option("-f", "--fo", default=None, help="Excel filepath, containing forced outage information (default: None)")
-@click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2 (default: no-skip)")
+@click.option("--copy_scenario2/--no_copy_scenario2", default=True, help="copying for senario2 (default: copy_scenario2)")
 @click.option("--project", default=None, help="Run only for one project (default: None")
 @click.option("-n", "--name", default="all", help="Description in name of csv files (default: all)")
-@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True (default: no-update)")
+@click.option("--update_database/--no_update_database", default=True, help="Update database only if this flag is True (default: update_database)")
 @click.option("-l", "--loglevel", default="INFO", help="Loglevel one of INFO,WARN,DEBUG,ERROR")
 def main(scenario1: str,
          scenario2: str,
@@ -548,7 +554,7 @@ def main(scenario1: str,
          database: str,
          timepoint_map: str,
          gridpath_repo: str,
-         skip_scenario2: bool,
+         copy_scenario2: bool,
          project: str,
          name: str,
          update_database: bool,
@@ -566,7 +572,7 @@ def main(scenario1: str,
         database,
         timepoint_map,
         gridpath_repo,
-        skip_scenario2,
+        copy_scenario2,
         project,
         name,
         update_database

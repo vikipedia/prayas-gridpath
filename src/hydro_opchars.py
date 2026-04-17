@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 def read_exogenous_availabilty_results(webdb, scenario, project):
     exo_avail_id = availability.get_exogenous_avail_id(
         webdb, scenario, project)
-    table = "inputs_project_availability_exogenous"
+    table = "inputs_project_availability_exogenous_independent"
     return common.filtered_table(webdb,
                                  table,
                                  project=project,
-                                 exogenous_availability_scenario_id=exo_avail_id)
+                                 exogenous_availability_independent_scenario_id=exo_avail_id)
 
 
 def get_period(webdb, scenario):
@@ -54,11 +54,11 @@ def compute_availability(availability_data,
         inputs_temporal[(inputs_temporal.spinup_or_lookahead == 0) | (inputs_temporal.spinup_or_lookahead.isna())], on="timepoint")
 
     a['weights'] = a.timepoint_weight * a.number_of_hours_in_timepoint
-    a.availability_derate = a.availability_derate * a.weights
+    a.availability_derate_independent = a.availability_derate_independent * a.weights
     a = a.merge(timepoint_horizon_map, on='timepoint')
     g = a.groupby('horizon', sort=False)[
-        ['availability_derate', 'weights']].sum()
-    derate = (g['availability_derate']/g['weights'])
+        ['availability_derate_independent', 'weights']].sum()
+    derate = (g['availability_derate_independent']/g['weights'])
     derate.name = "availability_derate"
     derate = derate.reset_index()
     derate['horizon'] = pd.to_numeric(derate['horizon'])
@@ -69,12 +69,13 @@ def hydro_op_chars_inputs_(webdb: web.db.SqliteDB, project,
                            hydro_op_chars_sid,
                            balancing_type_project):
     othercols = ['horizon',
-                 'period',
-                 'balancing_type_project']
+                 'balancing_type_project',
+                 'hydro_iteration',
+                 'stage_id']
     cols = ",".join(othercols + get_power_fraction_cols())
     rows = webdb.where("inputs_project_hydro_operational_chars",
-                       what=cols,
                        project=project,
+                       what=cols,
                        hydro_operational_chars_scenario_id=hydro_op_chars_sid,
                        balancing_type_project=balancing_type_project).list()
     if rows:
@@ -113,13 +114,11 @@ def swap_original_cols_from_file(dbdf,
     def merge_with_db(filedf, dbdf):
         filedf = filedf.copy()
         dbdf = dbdf.copy()
-
         for c in cols:
             del dbdf[c]
             del filedf[c]
 
         del filedf['balancing_type_project']
-        del filedf['period']
         dbdf = dbdf.merge(filedf, on="horizon")
         return dbdf.rename(columns=dict(zip(filecols, cols)))
 
@@ -140,18 +139,22 @@ def swap_original_cols_from_file(dbdf,
 
     if filecols[0] in filedf.columns:
         # columns exists
-        return merge_with_db(filedf, dbdf)
+        df = merge_with_db(filedf, dbdf)
     else:
         # columns does not exists
         filedf = copy_cols(filedf, filedf, cols, filecols)
-        allcols = ["balancing_type_project", "horizon", "period"]\
+        allcols = ["hydro_iteration", "stage_id",
+                   "balancing_type_project", "horizon"]\
             + get_power_fraction_cols()\
             + get_power_fraction_file_cols()
         filedf.to_csv(csvpath, index=False, columns=allcols)
         filedf = filedf[filedf.balancing_type_project ==
                         balancing_type_project]
-        dbdf = merge_with_db(filedf, dbdf)
-    return dbdf
+        df = merge_with_db(filedf, dbdf)
+
+    df = df.rename(columns={"hydro_iteration_x": "hydro_iteration",
+                            "stage_id_x": "stage_id"})
+    return df
 
 
 def hydro_op_chars_inputs(webdb, scenario, project, csv_location, description):
@@ -381,8 +384,12 @@ def reduce_size(df, scenario1, scenario2, timepoint_map):
 
     cols = [c for c in df.columns]
     rsuffix = "_other"
-    dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
+    missing_points = (set(df.timepoint.values) - set(t_map.index.values))
+    if missing_points:
+        raise Exception(
+            f"Possibly supplied timepoint map is wrong, {missing_points} These timepoints are missing from {t_map.index.name}")
 
+    dfnew = df.set_index("timepoint").join(t_map, rsuffix=rsuffix)
     weight = dfnew["number_of_hours_in_timepoint"]
     dfnew['gross_power_mw_x'] = dfnew['gross_power_mw'] * weight
     dfnew = dfnew.reset_index()
@@ -467,10 +474,11 @@ def availability_adjustment(webdb, scenario, project, hydro_op, timepoint_map):
     itht = get_timepoint_horizon_map(scenario, timepoint_map)
     derate = compute_availability(a, it, itht)
     df = pd.merge(hydro_op.reset_index(), derate.reset_index())
-    return compute_adjusted_min_max(df['availability_derate'],
-                                    df['cuf'],
-                                    df['min_power_fraction'],
-                                    df['max_power_fraction'])
+    a, b, c, d = compute_adjusted_min_max(df['availability_derate'],
+                                          df['cuf'],
+                                          df['min_power_fraction'],
+                                          df['max_power_fraction'])
+    return a, b, c, d, df
 
 
 def organise_results(hydro_op, cols, avg, min_, max_):
@@ -513,7 +521,7 @@ def adjusted_mean_results(webdb,
     the same order (ascending/descending) of horizon. If it is different,
     then we need to adjust the order befor doing calculation!
     """
-    cols = ["balancing_type_project", "horizon", "period",
+    cols = ["balancing_type_project", "horizon", "hydro_iteration", "stage_id",
             "average_power_fraction", "min_power_fraction", "max_power_fraction"]
     df0 = hydro_op_chars_inputs(webdb, scenario2, project,
                                 csv_location, description)
@@ -524,7 +532,7 @@ def adjusted_mean_results(webdb,
     cuf = gross_power_mw_df['gross_power_mw']/capacity
     weight = gross_power_mw_df['number_of_hours_in_timepoint']
     prd = gross_power_mw_df['period'].unique()[0]
-    hydro_op = df0[df0.period == prd].reset_index(
+    hydro_op = df0.reset_index(
         drop=True).set_index("horizon")
     min_, max_ = [hydro_op[c] for c in cols[-2:]]
     timepoint_map = pd.read_excel(mapfile,
@@ -533,12 +541,13 @@ def adjusted_mean_results(webdb,
                                   engine="openpyxl")
 
     if len(cuf) > len(min_):
+        print(len(cuf), len(min_))
         gross_power_mw_df = reduce_size(
             gross_power_mw_df, scenario1, scenario2, timepoint_map)
         gross_power_mw_df = gross_power_mw_df.set_index("horizon")
         hydro_op = hydro_op.join(gross_power_mw_df, rsuffix="right")
     elif len(cuf) < len(min_):
-        Exception(
+        raise Exception(
             "gross_power_mw needs to expand in size. Code does not handle it!")
     else:
         hydro_op = match_horizons(
@@ -546,29 +555,28 @@ def adjusted_mean_results(webdb,
 
     min_, max_ = [hydro_op[c] for c in cols[-2:]]
     hydro_op['cuf'] = hydro_op['gross_power_mw']/capacity
-    weight = hydro_op.reset_index()['number_of_hours_in_timepoint']
 
-    derate, avg, min_, max_ = availability_adjustment(
+    derate, avg, min_, max_, merged_df = availability_adjustment(
         webdb, scenario2, project, hydro_op, timepoint_map)
-
     horizon_count_dict = get_horizon_count_dict(
         scenario1, scenario2, timepoint_map)
-
+    weight = merged_df['number_of_hours_in_timepoint']
     prev = 0
     for horizon, count in horizon_count_dict.items():
         start_index = prev
         stop_index = start_index + count
-
-        avg[start_index: stop_index] = adjust_mean_const(avg[start_index: stop_index] * weight[start_index: stop_index],
-                                                         min_[
-                                                             start_index: stop_index] * weight[start_index: stop_index],
-                                                         max_[
-                                                             start_index: stop_index] * weight[start_index: stop_index],
-                                                         force=True) / weight[start_index: stop_index]
+        r = adjust_mean_const(avg[start_index: stop_index] * weight[start_index: stop_index],
+                              min_[start_index: stop_index] *
+                              weight[start_index: stop_index],
+                              max_[start_index: stop_index] *
+                              weight[start_index: stop_index],
+                              force=True)
+        r1 = r / weight[start_index: stop_index]
+        avg[start_index: stop_index] = r1
         prev = stop_index
 
     avg, min_, max_ = compute_adjusted_variables(derate, avg, min_, max_)
-    results = organise_results(hydro_op, cols, avg, min_, max_)
+    results = organise_results(merged_df, cols, avg, min_, max_)
     return results
 
 
@@ -593,7 +601,7 @@ def write_results_csv(results,
                       description):
     csvpath = common.get_subscenario_csvpath(project, subscenario,
                                              subscenario_id, csv_location, description)
-    cols = ["balancing_type_project", "horizon", "period"]
+    cols = ['hydro_iteration', 'stage_id', "balancing_type_project", "horizon"]
     cols += get_power_fraction_cols()
 
     on = 'horizon'
@@ -654,7 +662,7 @@ def hydro_op_chars(database,
 @click.option("-m", "--description", default="rpo50S3_all", help="Description for csv files.")
 @click.option("--project", default=None, help="Run for only one project")
 @click.option("-t", "--timepoint_map", default="timepoint_map.xlsx", help="Excel file of timepoint map")
-@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True")
+@click.option("--update_database/--no_update_database", default=True, help="Update database only if this flag is True")
 @click.option("-l", "--loglevel", default="INFO", help="Loglevel one of INFO,WARN,DEBUG,ERROR")
 def main(database,
          csv_location,

@@ -1,6 +1,6 @@
-GridPath>=0.14.1
+GridPath>=2024.1.0
 web.py
 xlrd
 openpyxl
-click
+click>=8.1.7
 pytest
