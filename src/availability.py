@@ -266,8 +266,8 @@ def combine_fo(results, fo):
     results = results_.reset_index()
 
     if results.fo.isnull().sum() != 0:
-        logger.error("Timepoint in forced ouage is incorrect")
-        raise Exception("Timepoint in forced ouage is incorrect")
+        logger.error("Timepoint in forced outage is incorrect")
+        raise Exception("Timepoint in forced outage is incorrect")
     m = results['availability_derate'].copy()
     f = results['fo']
     del results['fo']
@@ -471,7 +471,7 @@ def endogenous_to_exogenous(scenario1: str,
                             database: str,
                             mapfile: str,
                             gridpath_repo: str,
-                            skip_scenario2: bool,
+                            copy_scenario2: bool,
                             project: str,
                             name: str,
                             update_database: bool):
@@ -481,7 +481,7 @@ def endogenous_to_exogenous(scenario1: str,
     if project:
         projs = [project]
 
-    if not skip_scenario2:
+    if copy_scenario2:
         for project_ in projs:
             logger.info(f"Starting {project_} for {scenario2} ...")
             write_exogenous_via_gridpath_script(scenario1,
@@ -541,10 +541,10 @@ def endogenous_to_exogenous(scenario1: str,
 @click.option("-s2", "--scenario2", default="pass2", help="Name of scenario2 (default: pass2)")
 @click.option("-s3", "--scenario3", default=None, help="Name of scenario3 (default: None)")
 @click.option("-f", "--fo", default=None, help="Excel filepath, containing forced outage information (default: None)")
-@click.option("--skip_scenario2/--no-skip_scenario2", default=False, help="skip copying for senario2 (default: no-skip)")
+@click.option("--copy_scenario2/--no_copy_scenario2", default=True, help="copying for senario2 (default: copy_scenario2)")
 @click.option("--project", default=None, help="Run only for one project (default: None")
 @click.option("-n", "--name", default="all", help="Description in name of csv files (default: all)")
-@click.option("--update_database/--no-update_database", default=False, help="Update database only if this flag is True (default: no-update)")
+@click.option("--update_database/--no_update_database", default=True, help="Update database only if this flag is True (default: update_database)")
 @click.option("-l", "--loglevel", default="INFO", help="Loglevel one of INFO,WARN,DEBUG,ERROR")
 def main(scenario1: str,
          scenario2: str,
@@ -554,7 +554,7 @@ def main(scenario1: str,
          database: str,
          timepoint_map: str,
          gridpath_repo: str,
-         skip_scenario2: bool,
+         copy_scenario2: bool,
          project: str,
          name: str,
          update_database: bool,
@@ -572,7 +572,7 @@ def main(scenario1: str,
         database,
         timepoint_map,
         gridpath_repo,
-        skip_scenario2,
+        copy_scenario2,
         project,
         name,
         update_database
